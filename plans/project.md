@@ -53,28 +53,7 @@ structured fields, and translation notes. Uses OpenAI GPT-4o vision.
 ## Repository Structure
 
 ```
-pdfzx/
-├── plans/
-│   ├── project.md          # this file
-│   └── phase2.md           # Phase 2 LLM design
-├── pdfs/                   # input PDFs (gitignored)
-├── output/                 # generated output (gitignored)
-│   ├── manifest.json
-│   └── enriched/
-├── src/
-│   └── pdfzx/
-│       ├── __init__.py     # public API
-│       ├── inventory.py    # Phase 1 core
-│       ├── pipeline.py     # Phase 2 stub
-│       └── utils.py        # hashing, lang detect, digital check
-├── tests/
-│   ├── fixtures/           # minimal committed PDFs
-│   ├── conftest.py
-│   ├── test_inventory.py
-│   └── test_utils.py
-├── pyproject.toml
-├── uv.lock
-└── .python-version         # 3.14
+(to update)
 ```
 
 ---

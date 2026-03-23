@@ -5,7 +5,7 @@ You are a professional programmer and software architect.
 # Design Concept
 
 Modular, iterative development with smooth CI.
-Concise documentation.
+Concise documentation — high-level principles only, no implementation detail in docs.
 Concise comment and elegant code style.
 Leveled Logging design.
 Best practices,
