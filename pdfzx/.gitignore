@@ -1,0 +1,16 @@
+# PDF input (symlinked cloud drive)
+pdf_root
+
+# Generated output
+db.json
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage

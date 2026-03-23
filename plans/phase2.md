@@ -2,7 +2,7 @@
 
 ## Scope
 
-Phase 2 runs only on PDFs where `needs_ocr: true` (scanned/non-digital) and `phase2_status: pending` in `manifest.json`.
+Phase 2 runs only on PDFs where `needs_ocr: true` (scanned/non-digital) and `phase2_status: pending` in `db.json`.
 
 ---
 
@@ -24,8 +24,8 @@ All output is in **English only**.
 
 ## Deduplication
 
-- Duplicate files (same SHA-256) are logged in `manifest.json` but processed separately.
-- No files are skipped solely due to hash collision.
+- Duplicate files (same SHA-256) are tracked as multiple paths on one document record.
+- Processing is document-level by SHA-256; duplicate paths do not trigger duplicate Phase 2 work.
 
 ---
 
@@ -46,7 +46,7 @@ Each processed PDF writes to `output/enriched/<sha256>.json`:
 }
 ```
 
-`manifest.json` `phase2_status` field is updated: `pending → processing → done / failed`.
+`db.json` `phase2_status` field is updated: `pending → processing → done / failed`.
 
 ---
 
@@ -59,11 +59,11 @@ Each processed PDF writes to `output/enriched/<sha256>.json`:
 
 ### Key functions
 
-- `load_manifest(path)` — filter scanned + pending PDFs
+- `load_registry(path)` — filter scanned + pending PDFs
 - `pdf_to_images(path)` — render pages to PIL Images via pymupdf
 - `ocr_with_gpt4o(images)` — send images to GPT-4o vision endpoint, return text
 - `enrich_with_llm(text, file_name)` — single structured prompt, returns JSON
-- `process_batch(manifest_path)` — async, semaphore-controlled (default concurrency: 5)
+- `process_batch(db_path)` — async, semaphore-controlled (default concurrency: 5)
 
 ### Orchestration
 
@@ -100,12 +100,9 @@ Respond with valid JSON only.
 
 ---
 
-## CLI
+## Invocation
 
-```bash
-python src/phase2_pipeline.py --manifest ./output/manifest.json
-python src/phase2_pipeline.py --manifest ./output/manifest.json --concurrency 3
-```
+Phase 2 remains library-only. It is invoked programmatically by a watcher, worker, or task queue.
 
 ---
 

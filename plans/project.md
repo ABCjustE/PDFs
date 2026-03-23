@@ -22,31 +22,31 @@ For every PDF in the input directory:
 - Extract table of contents (recursive hierarchy)
 - Detect language(s): Chinese, English, or mixed
 - Classify: digital (text layer present) vs scanned (image-only)
-- Write a single `output/manifest.json` keyed by SHA-256
+- Maintain a persistent `db.json` registry at the project root
 
-**Output record:**
+**Document record:**
 ```json
 {
   "file_name": "doc.pdf",
   "sha256": "abc123...",
   "md5": "def456...",
-  "size_bytes": 1048576,
-  "page_count": 42,
+  "paths": ["contracts/doc.pdf"],
   "is_digital": true,
   "languages": ["zh", "en"],
-  "metadata": { "title": "", "author": "", "created": "", "modified": "" },
+  "metadata": { "title": "", "author": "", "created": "", "modified": "", "creator": "" },
   "toc": [{ "level": 1, "title": "Chapter 1", "page": 1 }],
-  "needs_ocr": false,
   "phase2_status": "pending"
 }
 ```
+
+Phase 1 also tracks per-path scan state and per-run job history in the same registry.
 
 ### Phase 2 — LLM Enrichment (deferred)
 
 For scanned PDFs (`needs_ocr: true`) only. See `plans/phase2.md`.
 
-Produces `output/enriched/<sha256>.json` with: OCR text, summary, tags, extracted
-structured fields, and translation notes. Uses OpenAI GPT-4o vision.
+Consumes Phase 1 registry records for scanned PDFs and writes enrichment output.
+See `plans/phase2.md` for the deferred design.
 
 ---
 
@@ -66,7 +66,7 @@ structured fields, and translation notes. Uses OpenAI GPT-4o vision.
 | Language detection | `langdetect` |
 | OCR + LLM enrichment (Phase 2) | `openai` (GPT-4o vision) |
 | Image handling (Phase 2) | `pillow` |
-| Serialisation | `json` + `dataclasses` (stdlib) |
+| Serialisation | `json` + `pydantic` |
 | Hashing | `hashlib` (stdlib) |
 | Tooling | `uv`, `ruff`, `pytest`, `pytest-asyncio` |
 
@@ -77,4 +77,4 @@ structured fields, and translation notes. Uses OpenAI GPT-4o vision.
 - **Schema-stable** — consistent field names/types; consumers must not break across runs
 - **Self-describing** — every entry carries enough context to be used in isolation
 - **Flat where possible** — nested only where structure is meaningful (toc, extracted_data)
-- **NDJSON-compatible** — manifest can be streamed line-by-line into vector DBs or search indexes
+- **NDJSON-compatible** — registry exports can be streamed line-by-line into vector DBs or search indexes

@@ -13,14 +13,15 @@ Pure ETL library — no CLI, no daemon. Called programmatically.
 
 | Module | Concern |
 |--------|---------|
+| `models.py` | All Pydantic V2 data models — stable contract for all modules |
 | `config.py` | Env vars → `ScanConfig` (Pydantic) |
-| `models.py` | All Pydantic V2 data models |
-| `utils.py` | Hashing, digital check, language detection |
-| `inventory.py` | PDF path → `DocumentRecord` (pure extraction, no I/O) |
+| `utils.py` | Path validation, streaming hashing, digital check, language detection |
+| `inventory.py` | PDF path → `DocumentRecord` (pure extraction, no I/O, no state) |
 | `normalizer.py` | Compute `normalised_name` — regex tier 1, LLM stub for Phase 2 |
-| `registry.py` | Load db → diff scan → merge → write job record |
-| `storage.py` | JSON read/write, swappable to SQLite via Protocol |
-| `pipeline.py` | Phase 2 stub |
+| `storage.py` | JSON read/write behind a `Storage` Protocol, schema validation on load |
+| `registry.py` | Load db → diff scan → merge → emit `JobRecord` |
+| `__init__.py` | `run_inventory()` entrypoint, JSON logging setup |
+| `pipeline.py` | Phase 2 stub only |
 
 ---
 
@@ -49,7 +50,7 @@ env: PDFZX_ROOT, PDFZX_DB
    config.py → ScanConfig
         │
         ▼
-   storage.py → load db.json (existing records)
+   storage.py → load db.json (existing records keyed by sha256)
         │
         ▼
    inventory.py → scan root, hash each PDF (mtime-gated), extract metadata/ToC/language
@@ -59,13 +60,16 @@ env: PDFZX_ROOT, PDFZX_DB
         │
         ▼
    registry.py → diff new scan against loaded db:
-        new hash          → add DocumentRecord
+        new hash               → add DocumentRecord
         known hash, new path   → append to paths[], log duplicate
-        known hash, mtime changed → update FileStatRecord, log updated
-        known hash, path gone     → flag removed (record kept, never deleted)
+        known hash, mtime ≠    → update FileStatRecord, log updated
+        known hash, path gone  → flag removed (record kept, never deleted)
         │
         ▼
    storage.py → write db.json + JobRecord
+        │
+        ▼
+   __init__.py → structured JSON log summary
 ```
 
 ---
@@ -81,15 +85,15 @@ env: PDFZX_ROOT, PDFZX_DB
 | File renaming | Never — `normalised_name` is a computed field only |
 | Storage | JSON now, SQLite later via `Storage` Protocol |
 | Validation | Pydantic V2 on all records crossing module boundaries |
+| Logging | Structured JSON via stdlib `logging`; configured once in `__init__.py` |
+| Errors | Logged and recorded in registry entries — never swallowed silently |
 
 ---
 
 ## Normaliser
 
-- **Tier 1 (Phase 1):** regex rules — strip illegal chars, collapse whitespace,
-  CJK-aware truncation, enforce max length. Offline, deterministic.
-- **Tier 2 (Phase 2):** LLM prompt — infer canonical name from content.
-  Stubbed as `normalize_with_llm()` raising `NotImplementedError`.
+- **Tier 1 (Phase 1):** regex — strip illegal chars, collapse whitespace, CJK-aware truncation, max length
+- **Tier 2 (Phase 2):** LLM prompt — infer canonical name from content; stubbed as `NotImplementedError`
 
 ---
 
@@ -99,17 +103,34 @@ All fixtures generated programmatically via `pymupdf` in `conftest.py` — no co
 
 | File | Covers |
 |------|--------|
-| `test_config.py` | Env var parsing, missing vars, invalid paths |
-| `test_inventory.py` | Metadata, ToC, digital detection, language detection |
+| `test_models.py` | Validation, field defaults, serialisation roundtrip |
+| `test_config.py` | Env var parsing, missing vars, invalid paths, path traversal |
+| `test_utils.py` | Streaming hash, digital/scanned detection, language detection |
+| `test_inventory.py` | Metadata, ToC, digital detection, CJK language detection |
 | `test_normalizer.py` | Regex rules, CJK names, missing names, long names |
+| `test_storage.py` | Read/write roundtrip, schema validation, missing file, corrupt JSON |
 | `test_registry.py` | First scan, incremental, duplicates, removals, mtime-gating |
-| `test_storage.py` | Read/write roundtrip, schema validation on load |
+
+---
+
+## Implementation Order
+
+1. `models.py` + `config.py` — stable contract
+2. `utils.py` — offline pure functions
+3. `inventory.py` — pure PDF extraction
+4. `normalizer.py` — regex tier 1 + LLM stub
+5. `storage.py` — persistence behind Protocol
+6. `registry.py` — diff/merge core
+7. `__init__.py` — `run_inventory()` + logging setup
+8. `pipeline.py` — Phase 2 stub
+9. `tests/` — all test files with generated fixtures
+10. Polish — pyproject.toml, README, ruff/mypy clean
 
 ---
 
 ## Environment Variables
 
 ```
-PDFZX_ROOT    path to PDF directory (required)
-PDFZX_DB      path to db.json output (default: ./output/db.json)
+PDFZX_ROOT    path to PDF directory, e.g. ./pdf_root (required)
+PDFZX_DB      path to db.json output (default: ./db.json at project root)
 ```

@@ -28,15 +28,15 @@ Execution model: library, not CLI. Invoked by file-watcher or task queue.
 - One concern per module; no cross-phase imports
 - Type hints on all public APIs; Google-style docstrings
 - Structured JSON logging via stdlib `logging`; no `print()` in library code
-- Errors are logged and surfaced in manifest entries — never swallowed silently
-- Choose data structures deliberately: `dataclasses` for typed records, generators for
-  large file iteration, dicts for O(1) hash-keyed manifest lookups
+- Errors are logged and surfaced in registry entries — never swallowed silently
+- Choose data structures deliberately: `Pydantic` for validated typed records, generators for
+  large file iteration, dicts for O(1) hash-keyed registry lookups
 - Algorithm complexity matters: hash files via streaming (O(n), constant memory);
   deduplication via hash sets (O(1) lookup); ToC hierarchy via recursive descent, not O(n²) scans
 
 # Security
 
 - Credentials via environment variables only — never hardcoded
-- `pdfs/` and `output/` are gitignored — never commit real content
+- `pdf_root/` and `db.json` are gitignored — never commit real content
 - Phase 1 is fully offline — no network calls in `inventory.py` or `utils.py`
 - Validate input paths against `pdf_dir` to prevent path traversal
