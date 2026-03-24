@@ -32,7 +32,7 @@ ScanConfig        root_path, db_path, ocr_char_threshold
 
 DocumentRecord    sha256 (PK), md5, paths[], file_name, normalised_name,
                   metadata, toc, languages[], is_digital,
-                  first_seen_job, last_seen_job, phase2_status
+                  first_seen_job?, last_seen_job?
 
 FileStatRecord    rel_path (PK), sha256, size_bytes, mtime, last_scanned_job
 
@@ -60,10 +60,11 @@ env: PDFZX_ROOT, PDFZX_DB
         │
         ▼
    registry.py → diff new scan against loaded db:
-        new hash               → add DocumentRecord
+        new hash               → add DocumentRecord (remove path from old doc if path existed)
         known hash, new path   → append to paths[], log duplicate
         known hash, mtime ≠    → update FileStatRecord, log updated
-        known hash, path gone  → flag removed (record kept, never deleted)
+        known hash, same mtime → skip
+        known hash, path gone  → flag removed per document (not per path), record kept
         │
         ▼
    storage.py → write db.json + JobRecord
@@ -92,7 +93,10 @@ env: PDFZX_ROOT, PDFZX_DB
 
 ## Normaliser
 
-- **Tier 1 (Phase 1):** regex — strip illegal chars, collapse whitespace, CJK-aware truncation, max length
+- **Tier 1 (Phase 1):** regex sanitiser — strip illegal chars, collapse whitespace,
+  strip leading dots, CJK-aware truncation, max 120 chars. Does **not** strip file
+  extensions or path components — caller's responsibility. Original paths preserved
+  in `DocumentRecord.paths[]`.
 - **Tier 2 (Phase 2):** LLM prompt — infer canonical name from content; stubbed as `NotImplementedError`
 
 ---
@@ -109,7 +113,7 @@ All fixtures generated programmatically via `pymupdf` in `conftest.py` — no co
 | `test_inventory.py` | Metadata, ToC, digital detection, CJK language detection |
 | `test_normalizer.py` | Regex rules, CJK names, missing names, long names |
 | `test_storage.py` | Read/write roundtrip, schema validation, missing file, corrupt JSON |
-| `test_registry.py` | First scan, incremental, duplicates, removals, mtime-gating |
+| `test_registry.py` | First scan, incremental, duplicates, removals, content-change-in-place, mtime-gating |
 
 ---
 
