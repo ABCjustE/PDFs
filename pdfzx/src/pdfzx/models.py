@@ -5,7 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+from pydantic import Field
 
 
 class PdfMetadata(BaseModel):
@@ -39,8 +40,8 @@ class DocumentRecord(BaseModel):
     toc: list[TocEntry] = Field(default_factory=list)
     languages: list[str] = Field(default_factory=list)
     is_digital: bool = True
-    first_seen_job: str
-    last_seen_job: str
+    first_seen_job: str | None = None
+    last_seen_job: str | None = None
 
 
 class FileStatRecord(BaseModel):
@@ -64,7 +65,12 @@ class JobStats(BaseModel):
 
 
 class JobRecord(BaseModel):
-    """Audit record for a single inventory scan run."""
+    """
+    Audit record for a single inventory scan run.
+
+    TODO Consider in RDB, job record one to many (new/updated) document records.
+    For tracking
+    """
 
     job_id: str
     run_at: datetime

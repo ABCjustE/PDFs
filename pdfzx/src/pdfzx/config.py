@@ -15,6 +15,7 @@ class ScanConfig(BaseModel):
     root_path: Path
     db_path: Path
     ocr_char_threshold: int = 100
+    ocr_scan_pages: int = 3
 
     @field_validator("root_path")
     @classmethod

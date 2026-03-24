@@ -34,6 +34,15 @@ Execution model: library, not CLI. Invoked by file-watcher or task queue.
 - Algorithm complexity matters: hash files via streaming (O(n), constant memory);
   deduplication via hash sets (O(1) lookup); ToC hierarchy via recursive descent, not O(n²) scans
 
+# Code Style Conformance
+
+After any significant code change (new module, refactor, or multi-file edit):
+
+1. Run `uv run ruff check --fix src/ tests/` — apply auto-fixes, then resolve remaining errors manually
+2. Run `uv run mypy src/` — all source files must pass strict type checking
+3. Use `# type: ignore[<code>]` only for untyped third-party C extensions (e.g. `pymupdf`, `langdetect`); never suppress real type errors
+4. Use `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml` for test-specific rule suppressions — not in source files
+
 # Security
 
 - Credentials via environment variables only — never hardcoded

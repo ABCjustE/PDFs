@@ -11,7 +11,6 @@ dependencies = [
     "langdetect>=1.0.9",
     "pydantic>=2.12.5",
     "pymupdf>=1.27.2",
-    "pypdf>=6.9.1",
 ]
 
 [project.optional-dependencies]
@@ -95,6 +94,21 @@ ignore = [
     "RUF012",  # mutable class attributes — acceptable without ClassVar
     "BLE001",  # blind except — acceptable with proper logging
     "SIM102",  # collapsible if — sometimes clearer separate
+    "TC001",   # move application import into TYPE_CHECKING — conflicts with runtime use
+    "TC002",   # move third-party import into TYPE_CHECKING — conflicts with runtime use
+    "TC003",   # move stdlib import into TYPE_CHECKING — conflicts with runtime use
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "D101",    # missing docstring in public class
+    "D102",    # missing docstring in public method
+    "D103",    # missing docstring in public function — not required in tests
+    "D106",    # missing docstring in public nested class
+    "PLC0415", # import not at top-level — acceptable in test helpers
+    "PT018",   # composite assertions — acceptable in tests
+    "RUF001",  # ambiguous unicode — CJK test strings are intentional
+    "TC001",   # move application import into TYPE_CHECKING — not needed in tests
 ]
 
 [tool.ruff.lint.isort]
@@ -118,6 +132,11 @@ warn_unreachable = true
 pretty = true
 show_column_numbers = true
 show_error_context = true
+
+[[tool.mypy.overrides]]
+module = ["langdetect", "langdetect.*", "pymupdf", "pymupdf.*", "fitz", "fitz.*"]
+ignore_missing_imports = true
+ignore_errors = true
 
 # ==== pytest ====
 

@@ -2,21 +2,19 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC
+from datetime import datetime
 
 import pytest
 from pydantic import ValidationError
 
-from pdfzx.models import (
-    DocumentRecord,
-    FileStatRecord,
-    JobRecord,
-    JobStats,
-    PdfMetadata,
-    Registry,
-    TocEntry,
-)
-
+from pdfzx.models import DocumentRecord
+from pdfzx.models import FileStatRecord
+from pdfzx.models import JobRecord
+from pdfzx.models import JobStats
+from pdfzx.models import PdfMetadata
+from pdfzx.models import Registry
+from pdfzx.models import TocEntry
 
 # ── PdfMetadata ──────────────────────────────────────────────────────────────
 
@@ -103,7 +101,7 @@ def test_file_stat_record_fields():
 
 def test_job_record_stats_defaults():
     job = JobRecord(
-        job_id="job-1", run_at=datetime(2024, 1, 1, tzinfo=timezone.utc), root_path="/data/pdfs"
+        job_id="job-1", run_at=datetime(2024, 1, 1, tzinfo=UTC), root_path="/data/pdfs"
     )
     assert job.stats == JobStats()
     assert job.stats.added == 0
@@ -112,7 +110,7 @@ def test_job_record_stats_defaults():
 def test_job_record_serialisation_roundtrip():
     job = JobRecord(
         job_id="job-2",
-        run_at=datetime(2024, 6, 1, tzinfo=timezone.utc),
+        run_at=datetime(2024, 6, 1, tzinfo=UTC),
         root_path="/data/pdfs",
         stats=JobStats(added=3, duplicates=1),
     )
