@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.11"
 dependencies = [
     "langdetect>=1.0.9",
+    "pydantic>=2.12.5",
     "pymupdf>=1.27.2",
     "pypdf>=6.9.1",
 ]
