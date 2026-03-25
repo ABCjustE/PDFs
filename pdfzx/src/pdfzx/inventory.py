@@ -12,6 +12,7 @@ from pdfzx.config import ScanConfig
 from pdfzx.models import DocumentRecord
 from pdfzx.models import PdfMetadata
 from pdfzx.models import TocEntry
+from pdfzx.normalizer import clean_text
 from pdfzx.utils import compute_hashes
 from pdfzx.utils import detect_languages
 from pdfzx.utils import is_digital
@@ -36,7 +37,9 @@ def _extract_metadata(doc: pymupdf.Document) -> PdfMetadata:
 
 
 def _extract_toc(doc: pymupdf.Document) -> list[TocEntry]:
-    return [TocEntry(level=lvl, title=title, page=page) for lvl, title, page in doc.get_toc()]
+    return [
+        TocEntry(level=lvl, title=clean_text(title), page=page) for lvl, title, page in doc.get_toc()
+    ]
 
 
 def process_pdf(path: Path, root: Path, config: ScanConfig) -> DocumentRecord:

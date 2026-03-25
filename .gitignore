@@ -144,4 +144,3 @@ cython_debug/
 .DS_Store
 
 plans/
-impls/

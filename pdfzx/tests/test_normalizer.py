@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from pdfzx.normalizer import normalize
+from pdfzx.normalizer import clean_text
 from pdfzx.normalizer import normalize_llm
 
 
@@ -51,6 +52,10 @@ def test_long_cjk_truncated():
 
 def test_mixed_illegal_and_whitespace():
     assert normalize("  hello<world>  ") == "helloworld"
+
+
+def test_clean_text_strips_nulls_and_control_chars():
+    assert clean_text("Chap\u0000ter \n One\t") == "Chapter One"
 
 
 def test_normalize_llm_raises():

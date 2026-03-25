@@ -121,7 +121,7 @@ def merge(
         if rel not in seen_rel_paths and stat.sha256 not in removed_hashes:
             removed_hashes.add(stat.sha256)
             stats.removed += 1
-            logger.info("removed", extra={"sha256": stat.sha256, "path": rel})
+            logger.info("removed(or the batch list not including this)", extra={"sha256": stat.sha256, "path": rel})
 
     job = JobRecord(
         job_id=job_id, run_at=datetime.now(tz=UTC), root_path=str(resolved_root), stats=stats

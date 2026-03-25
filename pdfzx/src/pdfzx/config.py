@@ -1,4 +1,4 @@
-"""Configuration — reads PDFZX_ROOT and PDFZX_DB from environment."""
+"""Configuration — reads PDFZX_PDF_ROOT and PDFZX_JSON_DB from environment."""
 
 from __future__ import annotations
 
@@ -23,10 +23,10 @@ class ScanConfig(BaseModel):
         """Ensure root_path resolves to an accessible directory."""
         resolved = v.resolve()
         if not resolved.exists():
-            msg = f"PDFZX_ROOT does not exist: {resolved}"
+            msg = f"PDFZX_PDF_ROOT does not exist: {resolved}"
             raise ValueError(msg)
         if not resolved.is_dir():
-            msg = f"PDFZX_ROOT is not a directory: {resolved}"
+            msg = f"PDFZX_PDF_ROOT is not a directory: {resolved}"
             raise ValueError(msg)
         return resolved
 
@@ -36,10 +36,10 @@ class ScanConfig(BaseModel):
         """Ensure the parent directory of db_path already exists."""
         resolved = v.resolve()
         if not resolved.parent.exists():
-            msg = f"PDFZX_DB parent directory does not exist: {resolved.parent}"
+            msg = f"PDFZX_JSON_DB parent directory does not exist: {resolved.parent}"
             raise ValueError(msg)
         if not resolved.parent.is_dir():
-            msg = f"PDFZX_DB parent path is not a directory: {resolved.parent}"
+            msg = f"PDFZX_JSON_DB parent path is not a directory: {resolved.parent}"
             raise ValueError(msg)
         return resolved
 
@@ -51,11 +51,11 @@ def get_config() -> ScanConfig:
         ScanConfig: validated configuration instance.
 
     Raises:
-        ValueError: if PDFZX_ROOT is missing or invalid.
+        ValueError: if PDFZX_PDF_ROOT is missing or invalid.
     """
-    root = os.environ.get("PDFZX_ROOT")
+    root = os.environ.get("PDFZX_PDF_ROOT")
     if not root:
-        msg = "PDFZX_ROOT environment variable is required"
+        msg = "PDFZX_PDF_ROOT environment variable is required"
         raise ValueError(msg)
-    db = os.environ.get("PDFZX_DB", "./db.json")
+    db = os.environ.get("PDFZX_JSON_DB", "./db.json")
     return ScanConfig(root_path=Path(root), db_path=Path(db))

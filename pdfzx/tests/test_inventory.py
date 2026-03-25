@@ -68,6 +68,16 @@ def test_toc_extracted(make_toc_pdf, pdf_root, config):
     assert record.toc[1].page == 2
 
 
+def test_toc_titles_strip_embedded_nulls(make_toc_pdf, pdf_root, config):
+    entries = [(1, "Chap\u0000ter One", 1), (2, "Sec\u0000tion 1.1", 2)]
+    src = make_toc_pdf("toc-null.pdf", entries)
+    path = _place(src, pdf_root)
+    record = process_pdf(path, pdf_root, config)
+
+    assert record.toc[0].title == "Chapter One"
+    assert record.toc[1].title == "Section 1.1"
+
+
 def test_language_detected(make_pdf, pdf_root, config):
     # English text long enough for langdetect
     src = make_pdf("en.pdf", ["The quick brown fox jumps over the lazy dog. " * 10])

@@ -7,6 +7,8 @@ import unicodedata
 
 _MAX_LEN = 120
 _ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f]")
+_NULL_ARTIFACTS = re.compile(r"[·\ufffd]")
 _WHITESPACE = re.compile(r"\s+")
 _LEADING_DOTS = re.compile(r"^\.+")
 
@@ -32,6 +34,16 @@ def _truncate(name: str, max_len: int) -> str:
     return cut
 
 
+def clean_text(text: str) -> str:
+    """Remove control characters and normalize whitespace for extracted text fields."""
+    if not text:
+        return ""
+
+    cleaned = _CONTROL_CHARS.sub("", text)
+    cleaned = _NULL_ARTIFACTS.sub("", cleaned)
+    return _WHITESPACE.sub(" ", cleaned).strip()
+
+
 def normalize(name: str) -> str:
     """Return a sanitised string suitable for use as a display name.
 
@@ -50,7 +62,7 @@ def normalize(name: str) -> str:
     if not name or not name.strip():
         return ""
     result = _ILLEGAL.sub("", name)
-    result = _WHITESPACE.sub(" ", result).strip()
+    result = clean_text(result)
     result = _LEADING_DOTS.sub("", result).strip()
     return _truncate(result, _MAX_LEN)
 

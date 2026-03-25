@@ -4,20 +4,37 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from pdfzx import InventoryJob
 from pdfzx import configure_logging
 from pdfzx.config import ScanConfig
-from pdfzx.config import get_config
 
 
 def _read_choice_file(path: Path) -> list[Path]:
     return [Path(line.strip()) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def _default_config() -> ScanConfig:
+    root = Path(os.environ.get("PDFZX_PDF_ROOT", Path(__file__).parent / "pdf_root"))
+    db = Path(os.environ.get("PDFZX_JSON_DB", Path(__file__).parent / "db.json"))
+    threshold = int(os.environ.get("PDFZX_OCR_CHAR_THRESHOLD", "100"))
+    scan_pages = int(os.environ.get("PDFZX_OCR_SCAN_PAGES", "3"))
+    return ScanConfig(
+        root_path=root,
+        db_path=db,
+        ocr_char_threshold=threshold,
+        ocr_scan_pages=scan_pages,
+    )
+
+
+def _default_log_level() -> str:
+    return os.environ.get("PDFZX_LOG_LEVEL", "DEBUG")
+
+
 def main() -> int:
-    default_config = get_config()
+    default_config = _default_config()
 
     parser = argparse.ArgumentParser(description="Run pdfzx inventory on Yazi-selected targets.")
     parser.add_argument(
@@ -40,7 +57,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--log-level",
-        default="INFO",
+        default=_default_log_level(),
         help="Logging level for structured JSON output.",
     )
     args = parser.parse_args()
