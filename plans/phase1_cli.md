@@ -1,5 +1,15 @@
 # Phase 1 — CLI Layer (`InventoryJob` + `client.py`)
 
+> **Note:** `yazi` (terminal file manager) works well as a zero-code alternative for
+> browsing and selecting files from `pdf_root/` without building a custom client at all.
+> `textual` also provides a directory-tree widget that would get very close to the same
+> UX if a TUI client is ever warranted. Both are worth considering before investing in
+> a bespoke `InventoryCLI`.
+
+  ```
+  yazi pdf_root --chooser-file=$(pwd)/yazi-choice.txt # need abs path
+  ```
+
 ## Problem
 
 `run_inventory()` in `__init__.py` does its own `rglob` internally, so the caller has

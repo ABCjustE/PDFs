@@ -1,18 +1,21 @@
-"""pdfzx public API — run_inventory() entrypoint and JSON logging setup."""
+"""pdfzx public API — inventory job orchestration and JSON logging setup."""
 
 from __future__ import annotations
 
 import logging
 import logging.config
+from collections.abc import Callable
+from pathlib import Path
 
 from pdfzx.config import ScanConfig
 from pdfzx.inventory import process_pdf
+from pdfzx.models import DocumentRecord
 from pdfzx.models import JobRecord
 from pdfzx.normalizer import normalize
 from pdfzx.registry import run as registry_run
 from pdfzx.storage import JsonStorage
 
-__all__ = ["configure_logging", "run_inventory"]
+__all__ = ["InventoryJob", "configure_logging"]
 
 
 def configure_logging(level: str = "INFO") -> None:
@@ -47,33 +50,77 @@ def configure_logging(level: str = "INFO") -> None:
     )
 
 
-def run_inventory(config: ScanConfig) -> JobRecord:
-    """Scan config.root_path, extract PDF metadata, and persist to db.json.
-
-    Orchestrates: discover PDFs → process each → normalize names → registry merge.
-
-    Args:
-        config: Validated scan configuration.
-
-    Returns:
-        JobRecord summarising this scan run.
-    """
+def _process_one(path: Path, root: Path, config: ScanConfig) -> DocumentRecord | None:
+    """Process one PDF, returning ``None`` when the file should be skipped."""
     logger = logging.getLogger(__name__)
-    root = config.root_path
 
-    pdf_paths = sorted(root.rglob("*.pdf"))
-    logger.info("scan started", extra={"root": str(root), "count": len(pdf_paths)})
+    try:
+        record = process_pdf(path, root, config)
+    except Exception:
+        logger.exception("skipping file due to error", extra={"path": str(path)})
+        return None
 
-    records, paths = [], []
-    for path in pdf_paths:
-        try:
-            record = process_pdf(path, root, config)
-            record.normalised_name = normalize(record.metadata.title or record.file_name)
-            records.append(record)
-            paths.append(path)
-        except Exception:
-            logger.exception("skipping file due to error", extra={"path": str(path)})
+    record.normalised_name = normalize(record.metadata.title or record.file_name)
+    return record
 
-    job = registry_run(JsonStorage(config.db_path), records, paths, root)
-    logger.info("scan complete", extra={"job_id": job.job_id, "stats": job.stats.model_dump()})
-    return job
+
+class InventoryJob:
+    """Resolve selected targets and run the Phase 1 inventory pipeline."""
+    def __init__(self, root: Path, config: ScanConfig) -> None:
+        self.root = root.resolve()
+        self.config = config
+        self._storage = JsonStorage(config.db_path)
+        self._logger = logging.getLogger(__name__)
+
+    def resolve(self, targets: list[Path]) -> list[Path]:
+        """Expand directory targets into a deduplicated, sorted PDF file list."""
+        resolved_targets: set[Path] = set()
+
+        for target in targets:
+            candidate = target.resolve(strict=False)
+            try:
+                relative = candidate.relative_to(self.root)
+                within_root = self.root / relative
+            except ValueError as exc:
+                msg = f"Path escapes configured root: {candidate}"
+                raise ValueError(msg) from exc
+
+            if not within_root.exists():
+                if within_root.suffix.lower() == ".pdf":
+                    resolved_targets.add(within_root)
+                continue
+
+            if within_root.is_dir():
+                resolved_targets.update(
+                    path.resolve() for path in within_root.rglob("*.pdf") if path.is_file()
+                )
+                continue
+
+            if within_root.is_file() and within_root.suffix.lower() == ".pdf":
+                resolved_targets.add(within_root.resolve())
+
+        return sorted(resolved_targets)
+
+    def run(
+        self,
+        targets: list[Path],
+        on_progress: Callable[[Path], None] | None = None,
+    ) -> JobRecord:
+        """Resolve selected targets, process PDFs, then merge them into the registry."""
+        pdf_paths = self.resolve(targets)
+        self._logger.info("scan started", extra={"root": str(self.root), "count": len(pdf_paths)})
+
+        records: list[DocumentRecord] = []
+        successful_paths: list[Path] = []
+
+        for path in pdf_paths:
+            record = _process_one(path, self.root, self.config)
+            if record is not None:
+                records.append(record)
+                successful_paths.append(path)
+            if on_progress is not None:
+                on_progress(path)
+
+        job = registry_run(self._storage, records, successful_paths, self.root)
+        self._logger.info("scan complete", extra={"job_id": job.job_id, "stats": job.stats.model_dump()})
+        return job
