@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from pdfzx.normalizer import normalize
 from pdfzx.normalizer import clean_text
+from pdfzx.normalizer import normalize
 from pdfzx.normalizer import normalize_llm
 
 

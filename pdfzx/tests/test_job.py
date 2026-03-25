@@ -24,9 +24,7 @@ def config(pdf_root: Path, tmp_path: Path) -> ScanConfig:
 
 
 def test_resolve_expands_directories_and_deduplicates(
-    make_pdf,
-    pdf_root: Path,
-    config: ScanConfig,
+    make_pdf, pdf_root: Path, config: ScanConfig
 ) -> None:
     nested_dir = pdf_root / "nested"
     nested_dir.mkdir()
@@ -37,14 +35,12 @@ def test_resolve_expands_directories_and_deduplicates(
     job = InventoryJob(root=pdf_root, config=config)
     resolved = job.resolve([pdf_root, nested_dir, first, second])
 
-    assert resolved == sorted({first.resolve(), second.resolve(), (nested_dir / "note.txt.pdf").resolve()})
+    assert resolved == sorted(
+        {first.resolve(), second.resolve(), (nested_dir / "note.txt.pdf").resolve()}
+    )
 
 
-def test_resolve_rejects_path_outside_root(
-    make_pdf,
-    pdf_root: Path,
-    config: ScanConfig,
-) -> None:
+def test_resolve_rejects_path_outside_root(make_pdf, pdf_root: Path, config: ScanConfig) -> None:
     outside = make_pdf("outside.pdf", ["outside"])
 
     job = InventoryJob(root=pdf_root, config=config)
@@ -53,13 +49,9 @@ def test_resolve_rejects_path_outside_root(
         job.resolve([outside])
 
 
-def test_run_processes_selected_targets(
-    make_pdf,
-    pdf_root: Path,
-    config: ScanConfig,
-) -> None:
+def test_run_processes_selected_targets(make_pdf, pdf_root: Path, config: ScanConfig) -> None:
     first = _place(make_pdf("first.pdf", ["hello world " * 10]), pdf_root, "first.pdf")
-    second = _place(make_pdf("second.pdf", ["another document " * 10]), pdf_root, "sub/second.pdf")
+    _place(make_pdf("second.pdf", ["another document " * 10]), pdf_root, "sub/second.pdf")
 
     job = InventoryJob(root=pdf_root, config=config)
     result = job.run([first, pdf_root / "sub"])
@@ -68,9 +60,7 @@ def test_run_processes_selected_targets(
 
 
 def test_run_calls_progress_once_per_resolved_file(
-    make_pdf,
-    pdf_root: Path,
-    config: ScanConfig,
+    make_pdf, pdf_root: Path, config: ScanConfig
 ) -> None:
     first = _place(make_pdf("first.pdf", ["hello world " * 10]), pdf_root, "first.pdf")
     second = _place(make_pdf("second.pdf", ["another document " * 10]), pdf_root, "sub/second.pdf")
@@ -82,11 +72,7 @@ def test_run_calls_progress_once_per_resolved_file(
     assert seen == sorted([first.resolve(), second.resolve()])
 
 
-def test_run_skips_invalid_pdf_and_continues(
-    make_pdf,
-    pdf_root: Path,
-    config: ScanConfig,
-) -> None:
+def test_run_skips_invalid_pdf_and_continues(make_pdf, pdf_root: Path, config: ScanConfig) -> None:
     good_path = _place(make_pdf("good.pdf", ["valid pdf content " * 10]), pdf_root, "good.pdf")
     bad_path = pdf_root / "bad.pdf"
     bad_path.write_text("not a pdf", encoding="utf-8")

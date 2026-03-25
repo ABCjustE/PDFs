@@ -7,13 +7,26 @@ import json
 import os
 from pathlib import Path
 
-from pdfzx import InventoryJob
-from pdfzx import configure_logging
-from pdfzx.config import ScanConfig
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent / ".env")
+
+import os  # noqa: E402 — after load_dotenv so env is populated
+
+_PDFZX_VARS = {k: v for k, v in os.environ.items() if k.startswith("PDFZX_")}
+print(f"env: {_PDFZX_VARS}", flush=True)
+
+from pdfzx import InventoryJob  # noqa: E402
+from pdfzx import configure_logging  # noqa: E402
+from pdfzx.config import ScanConfig  # noqa: E402
 
 
 def _read_choice_file(path: Path) -> list[Path]:
-    return [Path(line.strip()) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [
+        Path(line.strip())
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
 
 def _default_config() -> ScanConfig:
@@ -33,10 +46,16 @@ def _default_log_level() -> str:
     return os.environ.get("PDFZX_LOG_LEVEL", "DEBUG")
 
 
+def _default_workers() -> int:
+    return int(os.environ.get("PDFZX_WORKERS", "1"))
+
+
 def main() -> int:
     default_config = _default_config()
 
-    parser = argparse.ArgumentParser(description="Run pdfzx inventory on Yazi-selected targets.")
+    parser = argparse.ArgumentParser(
+        description="Run pdfzx inventory on Yazi-selected targets."
+    )
     parser.add_argument(
         "--choice-file",
         type=Path,
@@ -60,6 +79,12 @@ def main() -> int:
         default=_default_log_level(),
         help="Logging level for structured JSON output.",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=_default_workers(),
+        help="Number of parallel worker processes for PDF extraction (default 1 = serial).",
+    )
     args = parser.parse_args()
 
     configure_logging(args.log_level)
@@ -78,7 +103,9 @@ def main() -> int:
         ocr_char_threshold=default_config.ocr_char_threshold,
         ocr_scan_pages=default_config.ocr_scan_pages,
     )
-    job = InventoryJob(root=config.root_path, config=config).run(targets)
+    job = InventoryJob(
+        root=config.root_path, config=config, log_level=args.log_level
+    ).run(targets, workers=args.workers)
     print(json.dumps(job.model_dump(mode="json"), indent=2))
     return 0
 

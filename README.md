@@ -7,7 +7,7 @@
 Install dependencies:
 
 ```bash
-uv sync
+cd pdfzx && uv sync
 ```
 
 Create your local env file:
@@ -16,22 +16,8 @@ Create your local env file:
 cp .env.example .env
 ```
 
-Default variables:
-
-```bash
-PDFZX_PDF_ROOT=./pdf_root
-PDFZX_JSON_DB=./db.json
-PDFZX_OCR_CHAR_THRESHOLD=100
-PDFZX_OCR_SCAN_PAGES=3
-```
-
-If you want Python to see values from `.env`, export them before running:
-
-```bash
-set -a
-source .env
-set +a
-```
+Edit `.env` with your paths. `client.py` loads it automatically via `python-dotenv` — no
+manual `source .env` needed.
 
 ## Run
 
@@ -44,20 +30,19 @@ yazi "$PDFZX_PDF_ROOT" --chooser-file="$(pwd)/yazi-choice.txt"
 Then run the client:
 
 ```bash
-uv run python client.py
+pdfzx/.venv/bin/python client.py
 ```
 
 Notes:
 
+- `client.py` reads `.env` automatically — just edit it and run
 - `client.py` reads `./yazi-choice.txt` by default
-- `client.py` uses env-backed defaults when available
-- if env vars are not exported, `client.py` falls back to repo-local defaults
-- `--choice-file`, `--root`, and `--db` can still be overridden explicitly
+- `--choice-file`, `--root`, `--db`, `--workers`, and `--log-level` can be overridden explicitly
 
-Example:
+Example with explicit args:
 
 ```bash
-uv run python client.py --choice-file "$(pwd)/yazi-choice.txt"
+pdfzx/.venv/bin/python client.py --choice-file "$(pwd)/yazi-choice.txt" --workers 4
 ```
 
 ## Test
@@ -65,5 +50,5 @@ uv run python client.py --choice-file "$(pwd)/yazi-choice.txt"
 Run the test suite:
 
 ```bash
-uv run pytest
+cd pdfzx && uv run pytest
 ```

@@ -22,6 +22,28 @@ logger = logging.getLogger(__name__)
 
 _META_KEYS = ("title", "author", "creator", "creationDate", "modDate")
 
+# MuPDF messages whose prefixes indicate benign, recoverable conditions.
+# Everything else is logged at WARNING as it may affect extraction quality.
+_DEBUG_PREFIXES = (
+    "ignoring ",  # MuPDF skips non-critical elements and continues
+    "font ",  # font substitution / missing glyph — display only
+    "cmap ",  # character map issues — text may be wrong but file opens
+    "embedded icc",  # colour profile skipped — visual only
+)
+
+
+def _mupdf_level(msg: str) -> int:
+    """Return the appropriate log level for a MuPDF store message."""
+    return logging.DEBUG if msg.lower().startswith(_DEBUG_PREFIXES) else logging.WARNING
+
+
+def _drain_mupdf_store(rel_path: str) -> None:
+    """Emit each queued MuPDF message at a stratified level, then clear the store."""
+    store: list[str] = pymupdf.JM_mupdf_warnings_store
+    for msg in store:
+        logger.log(_mupdf_level(msg), "mupdf", extra={"path": rel_path, "detail": msg})
+    store.clear()
+
 
 def _extract_metadata(doc: pymupdf.Document) -> PdfMetadata:
     raw: dict[str, Any] = doc.metadata or {}
@@ -38,7 +60,8 @@ def _extract_metadata(doc: pymupdf.Document) -> PdfMetadata:
 
 def _extract_toc(doc: pymupdf.Document) -> list[TocEntry]:
     return [
-        TocEntry(level=lvl, title=clean_text(title), page=page) for lvl, title, page in doc.get_toc()
+        TocEntry(level=lvl, title=clean_text(title), page=page)
+        for lvl, title, page in doc.get_toc()
     ]
 
 
@@ -60,15 +83,26 @@ def process_pdf(path: Path, root: Path, config: ScanConfig) -> DocumentRecord:
         Exception: Re-raised after logging for any pymupdf failure.
     """
     resolved = validate_path(path, root)
-    logger.debug("processing", extra={"path": str(resolved)})
+    rel_path = str(resolved.relative_to(root.resolve()))
+    logger.debug("processing", extra={"path": rel_path})
 
     hashes = compute_hashes(resolved)
 
+    # Discard any residue from prior files before opening this one.
+    pymupdf.JM_mupdf_warnings_store.clear()
+
+    # Narrow error-print suppression to open() only; restore via finally.
+    pymupdf.JM_mupdf_show_errors = 0
     try:
         doc = pymupdf.open(str(resolved))  # type: ignore[no-untyped-call]
     except Exception:
-        logger.exception("failed to open PDF", extra={"path": str(resolved)})
+        logger.exception("failed to open PDF", extra={"path": rel_path})
         raise
+    finally:
+        pymupdf.JM_mupdf_show_errors = 1
+
+    # Drain messages produced during open() (e.g. xref repair, syntax errors).
+    _drain_mupdf_store(rel_path)
 
     try:
         metadata = _extract_metadata(doc)
@@ -79,7 +113,9 @@ def process_pdf(path: Path, root: Path, config: ScanConfig) -> DocumentRecord:
     finally:
         doc.close()  # type: ignore[no-untyped-call]
 
-    rel_path = str(resolved.relative_to(root.resolve()))
+    # Drain messages produced during extraction (get_toc, get_text).
+    _drain_mupdf_store(rel_path)
+
     record = DocumentRecord(
         sha256=hashes["sha256"],
         md5=hashes["md5"],
@@ -90,5 +126,5 @@ def process_pdf(path: Path, root: Path, config: ScanConfig) -> DocumentRecord:
         languages=languages,
         is_digital=digital,
     )
-    logger.info("processed", extra={"sha256": record.sha256, "path": rel_path})
+    logger.info("processed", extra={"path": rel_path})
     return record
