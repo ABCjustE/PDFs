@@ -42,6 +42,7 @@ After any significant code change (new module, refactor, or multi-file edit):
 2. Run `uv run mypy src/` — all source files must pass strict type checking
 3. Use `# type: ignore[<code>]` only for untyped third-party C extensions (e.g. `pymupdf`, `langdetect`); never suppress real type errors
 4. Use `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml` for test-specific rule suppressions — not in source files
+5. Remove temporary debugging artifacts before finishing a change: no committed `pdb.set_trace()`, demo `raise ValueError(...)`, or commented-out production call paths
 
 # Security
 

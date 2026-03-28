@@ -8,17 +8,13 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+from pdfzx import InventoryJob
+from pdfzx import configure_logging
+from pdfzx.config import ScanConfig
 
-load_dotenv(Path(__file__).parent / ".env")
 
-import os  # noqa: E402 — after load_dotenv so env is populated
-
-_PDFZX_VARS = {k: v for k, v in os.environ.items() if k.startswith("PDFZX_")}
-print(f"env: {_PDFZX_VARS}", flush=True)
-
-from pdfzx import InventoryJob  # noqa: E402
-from pdfzx import configure_logging  # noqa: E402
-from pdfzx.config import ScanConfig  # noqa: E402
+def _load_env() -> None:
+    load_dotenv(Path(__file__).parent / ".env")
 
 
 def _read_choice_file(path: Path) -> list[Path]:
@@ -51,6 +47,7 @@ def _default_workers() -> int:
 
 
 def main() -> int:
+    _load_env()
     default_config = _default_config()
 
     parser = argparse.ArgumentParser(
