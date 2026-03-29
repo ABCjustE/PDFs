@@ -19,6 +19,9 @@ class ScanConfig(BaseModel):
     normalize_document_name: bool = True
     fulltext_dir: Path = Path("./pdf_fulltext")
     extract_text: bool = True
+    online_features: bool = False
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-4o-mini"
 
     @field_validator("root_path")
     @classmethod
@@ -71,10 +74,21 @@ def get_config() -> ScanConfig:
         "no",
         "off",
     )
+    online_features = os.environ.get("PDFZX_ONLINE_FEATURES", "false").strip().lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
+    )
+    openai_api_key = os.environ.get("PDFZX_OPENAI_API_KEY")
+    openai_model = os.environ.get("PDFZX_OPENAI_MODEL", "gpt-4o-mini")
     return ScanConfig(
         root_path=Path(root),
         db_path=Path(db),
         normalize_document_name=normalize_document_name,
         fulltext_dir=Path(fulltext),
         extract_text=extract_text,
+        online_features=online_features,
+        openai_api_key=openai_api_key,
+        openai_model=openai_model,
     )

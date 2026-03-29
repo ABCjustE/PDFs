@@ -34,6 +34,14 @@ def default_config() -> ScanConfig:
             os.environ.get("PDFZX_ENABLE_NAME_NORMALIZATION", "true").strip().lower()
             not in {"0", "false", "no", "off"}
         ),
+        online_features=os.environ.get("PDFZX_ONLINE_FEATURES", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        },
+        openai_api_key=os.environ.get("PDFZX_OPENAI_API_KEY"),
+        openai_model=os.environ.get("PDFZX_OPENAI_MODEL", "gpt-4o-mini"),
     )
 
 

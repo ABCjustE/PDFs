@@ -34,12 +34,23 @@ def _default_config() -> ScanConfig:
         os.environ.get("PDFZX_ENABLE_NAME_NORMALIZATION", "true").strip().lower()
         not in {"0", "false", "no", "off"}
     )
+    online_features = os.environ.get("PDFZX_ONLINE_FEATURES", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    openai_api_key = os.environ.get("PDFZX_OPENAI_API_KEY")
+    openai_model = os.environ.get("PDFZX_OPENAI_MODEL", "gpt-4o-mini")
     return ScanConfig(
         root_path=root,
         db_path=db,
         ocr_char_threshold=threshold,
         ocr_scan_pages=scan_pages,
         normalize_document_name=normalize_document_name,
+        online_features=online_features,
+        openai_api_key=openai_api_key,
+        openai_model=openai_model,
     )
 
 
@@ -114,6 +125,9 @@ def main() -> int:
         ocr_char_threshold=default_config.ocr_char_threshold,
         ocr_scan_pages=default_config.ocr_scan_pages,
         normalize_document_name=default_config.normalize_document_name,
+        online_features=default_config.online_features,
+        openai_api_key=default_config.openai_api_key,
+        openai_model=default_config.openai_model,
     )
     inventory = InventoryJob(root=config.root_path, config=config, log_level=args.log_level)
 

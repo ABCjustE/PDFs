@@ -126,3 +126,31 @@ def test_get_config_extract_text_false(tmp_path: Path, monkeypatch: pytest.Monke
     config = get_config()
 
     assert config.extract_text is False
+
+
+def test_get_config_online_features_default_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PDFZX_PDF_ROOT", str(tmp_path))
+    monkeypatch.setenv("PDFZX_JSON_DB", str(tmp_path / "db.json"))
+    monkeypatch.delenv("PDFZX_ONLINE_FEATURES", raising=False)
+
+    config = get_config()
+
+    assert config.online_features is False
+
+
+def test_get_config_reads_online_features_and_openai_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PDFZX_PDF_ROOT", str(tmp_path))
+    monkeypatch.setenv("PDFZX_JSON_DB", str(tmp_path / "db.json"))
+    monkeypatch.setenv("PDFZX_ONLINE_FEATURES", "true")
+    monkeypatch.setenv("PDFZX_OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("PDFZX_OPENAI_MODEL", "gpt-4o-mini")
+
+    config = get_config()
+
+    assert config.online_features is True
+    assert config.openai_api_key == "test-key"
+    assert config.openai_model == "gpt-4o-mini"
