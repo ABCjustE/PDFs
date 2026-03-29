@@ -563,6 +563,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "langdetect" },
+    { name = "openai" },
     { name = "pydantic" },
     { name = "pymupdf" },
     { name = "python-dotenv" },
@@ -589,6 +590,7 @@ extras = [
 [package.metadata]
 requires-dist = [
     { name = "langdetect", specifier = ">=1.0.9" },
+    { name = "openai", specifier = ">=2.29.0" },
     { name = "openai", marker = "extra == 'phase2'", specifier = ">=1.0.0" },
     { name = "pillow", marker = "extra == 'phase2'", specifier = ">=11.0.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
