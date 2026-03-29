@@ -19,6 +19,7 @@ def build_client_command(
     return [
         sys.executable,
         str(client_script),
+        "scan",
         "--choice-file",
         str(choice_file),
         "--root",

@@ -6,23 +6,28 @@
 Stable Pydantic V2 contract for all modules.
 
 **`models.py`**
+- `ExtractionStatus(StrEnum)` — pending, skipped, gate_fail, gate_pass, forced, failed
 - `PdfMetadata` — title, author, creator, created, modified, extra
 - `TocEntry` — level, title, page
 - `DocumentRecord` — sha256 (PK), md5, paths[], file_name, normalised_name,
-  metadata, toc, languages[], is_digital, first_seen_job?, last_seen_job?
+  metadata, toc, languages[], is_digital, extraction_status?, force_extracted,
+  first_seen_job?, last_seen_job?
 - `FileStatRecord` — rel_path, sha256, size_bytes, mtime, last_scanned_job
 - `JobStats` — added, updated, removed, duplicates, skipped
 - `JobRecord` — job_id, run_at, root_path, stats
 - `Registry` — documents{}, file_stats{}, jobs[]
 
 **`config.py`**
-- `ScanConfig` — root_path, db_path, ocr_char_threshold=100, ocr_scan_pages=3
-- `get_config()` — reads `PDFZX_PDF_ROOT` + `PDFZX_JSON_DB` from env, re-reads on every call
+- `ScanConfig` — root_path, db_path, ocr_char_threshold=100, ocr_scan_pages=3,
+  fulltext_dir=./pdf_fulltext, extract_text=True
+- `get_config()` — reads all `PDFZX_*` env vars including `PDFZX_FULLTEXT_DIR`
+  and `PDFZX_EXTRACT_TEXT`, re-reads on every call
 
 **Key decisions:**
 - `first_seen_job` / `last_seen_job` are `str | None` — `inventory.py` returns `None`,
   `registry.py` stamps the job ID on merge
 - `get_config()` has no cache — caller is responsible for lifecycle
+- `ExtractionStatus` uses `StrEnum` (Python 3.11+) — avoids `str, Enum` dual-inheritance
 
 ---
 
@@ -58,13 +63,15 @@ Single public function `process_pdf(path, root, config) → DocumentRecord`.
 ---
 
 ### Step 4 — `normalizer.py`
-- `normalize(name)` — sanitiser only: strip illegal chars, collapse whitespace,
-  strip leading dots, truncate to 120 chars with CJK-aware boundary
+- `normalize(name)` — deterministic token normalization
+- `normalize_file_name(name)` — filename-oriented normalization for `normalised_name`;
+  uses `file_name` as input, replaces non-alphanumeric runs with spaces, collapses spaces,
+  title-cases tokens, and preserves the `.pdf` suffix for rename use
 - `normalize_llm(name, context)` — Phase 2 stub, raises `NotImplementedError`
 
 **Key decisions:**
-- `normalize()` does **not** strip file extensions or path components — that is
-  the caller's responsibility; original paths are preserved in `DocumentRecord.paths[]`
+- `normalised_name` is derived from `file_name`, not `metadata.title`
+- `normalised_name` is rename-oriented and keeps the `.pdf` suffix
 
 ---
 
@@ -167,9 +174,10 @@ path disappearance plus reappearance of the same content hash at another path.
 ### Step 8 — `pipeline.py`
 Phase 2 stub only. `enrich(record)` raises `NotImplementedError`.
 
+
 ---
 
-### Step 10 — Polish
+### Step 9 — Polish
 - `pyproject.toml` — `TC001` added to ruff ignore (runtime imports); mypy overrides for
   `pymupdf` and `langdetect` (untyped C extensions); `[per-file-ignores]` for test files
 - `AGENTS.md` — Code Style Conformance section added
@@ -180,15 +188,15 @@ Phase 2 stub only. `enrich(record)` raises `NotImplementedError`.
 
 | File | Tests | Coverage |
 |------|-------|----------|
-| `models.py` | 12 | 100% |
-| `config.py` | 6 | 100% |
+| `models.py` | 14 | 100% |
+| `config.py` | 11 | 100% |
 | `utils.py` | 10 | 95% |
-| `inventory.py` | 10 | 93% |
-| `normalizer.py` | 11 | 100% |
+| `inventory.py` | 10 | 96% |
+| `normalizer.py` | 11 | 98% |
 | `storage.py` | 8 | 100% |
 | `registry.py` | 9 | 100% |
 
-**66 passing, 0 failing, 92% total coverage**
+**96 passing, 0 failing, 93% total coverage**
 
 ---
 
@@ -209,4 +217,4 @@ Phase 2 stub only. `enrich(record)` raises `NotImplementedError`.
 |------|-------|
 | Real-world integration test | Run `run_inventory()` against actual `pdf_root/` symlink |
 | `phase1_impl.md` → archive | Move to `plans/phase1_done.md` once integration test passes |
-| Phase 2 design review | Review `plans/phase2.md` before starting |
+| Phase 2.2 implementation | Review `plans/phase2.md` Part 2 before starting |

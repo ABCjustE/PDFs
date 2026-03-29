@@ -16,7 +16,8 @@ from pdfzx.config import ScanConfig
 from pdfzx.inventory import process_pdf
 from pdfzx.models import DocumentRecord
 from pdfzx.models import JobRecord
-from pdfzx.normalizer import normalize
+from pdfzx.models import Registry
+from pdfzx.normalizer import normalize_file_name
 from pdfzx.registry import run as registry_run
 from pdfzx.storage import JsonStorage
 
@@ -79,7 +80,8 @@ def _process_one(path: Path, root: Path, config: ScanConfig) -> DocumentRecord |
         logger.exception("skipping file due to error", extra={"path": str(path)})
         return None
 
-    record.normalised_name = normalize(record.metadata.title or record.file_name)
+    if config.normalize_document_name:
+        record.normalised_name = normalize_file_name(record.file_name)
     return record
 
 
@@ -174,3 +176,27 @@ class InventoryJob:
             "scan complete", extra={"job_id": job.job_id, "stats": job.stats.model_dump()}
         )
         return job
+
+    def backfill_normalised_names(self) -> int:
+        """Update deterministic normalized names for existing registry documents."""
+        if not self.config.normalize_document_name:
+            self._logger.info("normalised name backfill skipped", extra={"enabled": False})
+            return 0
+
+        registry = self._storage.load()
+        updated = self._apply_normalised_names(registry)
+        if updated:
+            self._storage.save(registry)
+        self._logger.info("normalised name backfill complete", extra={"updated": updated})
+        return updated
+
+    @staticmethod
+    def _apply_normalised_names(registry: Registry) -> int:
+        updated = 0
+        for document in registry.documents.values():
+            candidate = normalize_file_name(document.file_name)
+            if document.normalised_name == candidate:
+                continue
+            document.normalised_name = candidate or None
+            updated += 1
+        return updated

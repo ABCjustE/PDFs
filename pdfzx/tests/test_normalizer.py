@@ -6,6 +6,7 @@ import pytest
 
 from pdfzx.normalizer import clean_text
 from pdfzx.normalizer import normalize
+from pdfzx.normalizer import normalize_file_name
 from pdfzx.normalizer import normalize_llm
 
 
@@ -13,16 +14,16 @@ def test_basic_ascii():
     assert normalize("Hello World") == "Hello World"
 
 
-def test_strips_illegal_chars():
-    assert normalize('file<>:"/\\|?*name') == "filename"
+def test_replaces_non_alnum_runs_with_spaces():
+    assert normalize('file<>:"/\\|?*name') == "File Name"
 
 
 def test_collapses_whitespace():
-    assert normalize("lots   of   spaces") == "lots of spaces"
+    assert normalize("lots   of   spaces") == "Lots Of Spaces"
 
 
 def test_strips_leading_dots():
-    assert normalize("...hidden") == "hidden"
+    assert normalize("...hidden") == "Hidden"
 
 
 def test_empty_string():
@@ -51,7 +52,15 @@ def test_long_cjk_truncated():
 
 
 def test_mixed_illegal_and_whitespace():
-    assert normalize("  hello<world>  ") == "helloworld"
+    assert normalize("  hello<world>  ") == "Hello World"
+
+
+def test_strips_path_and_extension():
+    assert normalize("nested/My-Book_v2.pdf") == "My Book V2"
+
+
+def test_normalize_file_name_preserves_pdf_suffix():
+    assert normalize_file_name("nested/My-Book_v2.pdf") == "My Book V2.pdf"
 
 
 def test_clean_text_strips_nulls_and_control_chars():

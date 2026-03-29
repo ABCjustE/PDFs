@@ -59,8 +59,7 @@ def test_get_config_requires_pdfzx_pdf_root(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_get_config_reads_environment_each_call(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     first_root = tmp_path / "root-one"
     second_root = tmp_path / "root-two"
@@ -82,3 +81,48 @@ def test_get_config_reads_environment_each_call(
     assert second_config.root_path == second_root.resolve()
     assert first_config.db_path == first_db.resolve()
     assert second_config.db_path == second_db.resolve()
+
+
+def test_get_config_reads_name_normalization_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PDFZX_PDF_ROOT", str(tmp_path))
+    monkeypatch.setenv("PDFZX_JSON_DB", str(tmp_path / "db.json"))
+    monkeypatch.setenv("PDFZX_ENABLE_NAME_NORMALIZATION", "false")
+
+    config = get_config()
+
+    assert config.normalize_document_name is False
+
+
+def test_get_config_reads_fulltext_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    custom_dir = tmp_path / "my_fulltext"
+    monkeypatch.setenv("PDFZX_PDF_ROOT", str(tmp_path))
+    monkeypatch.setenv("PDFZX_JSON_DB", str(tmp_path / "db.json"))
+    monkeypatch.setenv("PDFZX_FULLTEXT_DIR", str(custom_dir))
+
+    config = get_config()
+
+    assert config.fulltext_dir == custom_dir
+
+
+def test_get_config_extract_text_default_true(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PDFZX_PDF_ROOT", str(tmp_path))
+    monkeypatch.setenv("PDFZX_JSON_DB", str(tmp_path / "db.json"))
+    monkeypatch.delenv("PDFZX_EXTRACT_TEXT", raising=False)
+
+    config = get_config()
+
+    assert config.extract_text is True
+
+
+def test_get_config_extract_text_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PDFZX_PDF_ROOT", str(tmp_path))
+    monkeypatch.setenv("PDFZX_JSON_DB", str(tmp_path / "db.json"))
+    monkeypatch.setenv("PDFZX_EXTRACT_TEXT", "false")
+
+    config = get_config()
+
+    assert config.extract_text is False

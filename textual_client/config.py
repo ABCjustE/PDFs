@@ -30,6 +30,10 @@ def default_config() -> ScanConfig:
         db_path=default_db(),
         ocr_char_threshold=int(os.environ.get("PDFZX_OCR_CHAR_THRESHOLD", "100")),
         ocr_scan_pages=int(os.environ.get("PDFZX_OCR_SCAN_PAGES", "3")),
+        normalize_document_name=(
+            os.environ.get("PDFZX_ENABLE_NAME_NORMALIZATION", "true").strip().lower()
+            not in {"0", "false", "no", "off"}
+        ),
     )
 
 

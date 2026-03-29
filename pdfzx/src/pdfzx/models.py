@@ -3,10 +3,22 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel
 from pydantic import Field
+
+
+class ExtractionStatus(StrEnum):
+    """Phase 2.1 text-extraction lifecycle state."""
+
+    pending = "pending"
+    skipped = "skipped"  # ineligible: not digital or no ToC
+    gate_fail = "gate_fail"  # LLM rejected degenerate ToC
+    gate_pass = "gate_pass"  # LLM approved, text files written
+    forced = "forced"  # force_extract() bypassed the gate
+    failed = "failed"  # extraction attempted but errored
 
 
 class PdfMetadata(BaseModel):
@@ -40,6 +52,10 @@ class DocumentRecord(BaseModel):
     toc: list[TocEntry] = Field(default_factory=list)
     languages: list[str] = Field(default_factory=list)
     is_digital: bool = True
+    toc_valid: bool | None = None  # None = not yet assessed by LLM
+    toc_invalid_reason: str | None = None  # populated when toc_valid=False
+    extraction_status: ExtractionStatus | None = None
+    force_extracted: bool = False
     first_seen_job: str | None = None
     last_seen_job: str | None = None
 

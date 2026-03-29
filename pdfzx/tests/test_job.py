@@ -81,3 +81,84 @@ def test_run_skips_invalid_pdf_and_continues(make_pdf, pdf_root: Path, config: S
     result = job.run([good_path, bad_path])
 
     assert result.stats.added == 1
+
+
+def test_run_assigns_normalised_name(make_pdf, pdf_root: Path, config: ScanConfig) -> None:
+    path = _place(make_pdf("advanced_python_3rd.pdf", ["hello world " * 10]), pdf_root, "advanced_python_3rd.pdf")
+
+    job = InventoryJob(root=pdf_root, config=config)
+    job.run([path])
+    registry = job._storage.load()  # noqa: SLF001 - test inspects persisted result
+
+    document = next(iter(registry.documents.values()))
+    assert document.normalised_name == "Advanced Python 3rd.pdf"
+
+
+def test_backfill_normalised_names_updates_existing_registry(
+    pdf_root: Path, tmp_path: Path, config: ScanConfig
+) -> None:
+    config = ScanConfig(root_path=pdf_root, db_path=tmp_path / "db.json")
+    config.db_path.write_text(
+        """
+{
+  "documents": {
+    "abc": {
+      "sha256": "abc",
+      "md5": "def",
+      "paths": ["sample.pdf"],
+      "file_name": "advanced_python_3rd.pdf",
+      "normalised_name": null,
+      "metadata": {},
+      "toc": [],
+      "languages": [],
+      "is_digital": true,
+      "first_seen_job": null,
+      "last_seen_job": null
+    }
+  },
+  "file_stats": {},
+  "jobs": []
+}
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    job = InventoryJob(root=pdf_root, config=config)
+
+    assert job.backfill_normalised_names() == 1
+    assert job._storage.load().documents["abc"].normalised_name == "Advanced Python 3rd.pdf"  # noqa: SLF001
+
+
+def test_backfill_uses_file_name_not_metadata_title(
+    pdf_root: Path, tmp_path: Path
+) -> None:
+    config = ScanConfig(root_path=pdf_root, db_path=tmp_path / "db.json")
+    config.db_path.write_text(
+        """
+{
+  "documents": {
+    "abc": {
+      "sha256": "abc",
+      "md5": "def",
+      "paths": ["sample.pdf"],
+      "file_name": "advanced_python_3rd.pdf",
+      "normalised_name": null,
+      "metadata": {"title": "Completely Different Metadata Title"},
+      "toc": [],
+      "languages": [],
+      "is_digital": true,
+      "first_seen_job": null,
+      "last_seen_job": null
+    }
+  },
+  "file_stats": {},
+  "jobs": []
+}
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    job = InventoryJob(root=pdf_root, config=config)
+
+    assert job.backfill_normalised_names() == 1
+    assert job._storage.load().documents["abc"].normalised_name == "Advanced Python 3rd.pdf"  # noqa: SLF001

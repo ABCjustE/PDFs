@@ -113,7 +113,12 @@ ignore = [
     "PLC0415", # import not at top-level — acceptable in test helpers
     "PT018",   # composite assertions — acceptable in tests
     "RUF001",  # ambiguous unicode — CJK test strings are intentional
+    "S105",    # possible hardcoded password — false positive on enum value strings
     "TC001",   # move application import into TYPE_CHECKING — not needed in tests
+    "E501",    # line too long — long test fixture strings acceptable
+]
+"src/pdfzx/models.py" = [
+    "S105",    # false positive: StrEnum values are not passwords
 ]
 
 [tool.ruff.lint.isort]

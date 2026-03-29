@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from pdfzx.models import DocumentRecord
+from pdfzx.models import ExtractionStatus
 from pdfzx.models import FileStatRecord
 from pdfzx.models import JobRecord
 from pdfzx.models import JobStats
@@ -43,6 +44,46 @@ def test_toc_entry_missing_field_raises():
         TocEntry(level=1, title="Chapter 1")  # page missing
 
 
+# ── ExtractionStatus ──────────────────────────────────────────────────────────
+
+
+def test_extraction_status_values():
+    assert ExtractionStatus.pending == "pending"
+    assert ExtractionStatus.skipped == "skipped"
+    assert ExtractionStatus.gate_fail == "gate_fail"
+    assert ExtractionStatus.gate_pass == "gate_pass"
+    assert ExtractionStatus.forced == "forced"
+    assert ExtractionStatus.failed == "failed"
+
+
+def test_extraction_status_roundtrip_in_document_record():
+    doc = DocumentRecord(
+        sha256="a" * 64,
+        md5="b" * 32,
+        file_name="x.pdf",
+        extraction_status=ExtractionStatus.gate_pass,
+        first_seen_job="j1",
+        last_seen_job="j1",
+    )
+    restored = DocumentRecord.model_validate(doc.model_dump())
+    assert restored.extraction_status == ExtractionStatus.gate_pass
+
+
+def test_toc_valid_fields_roundtrip():
+    doc = DocumentRecord(
+        sha256="a" * 64,
+        md5="b" * 32,
+        file_name="x.pdf",
+        toc_valid=False,
+        toc_invalid_reason="OCR artifacts in all entries",
+        first_seen_job="j1",
+        last_seen_job="j1",
+    )
+    restored = DocumentRecord.model_validate(doc.model_dump())
+    assert restored.toc_valid is False
+    assert restored.toc_invalid_reason == "OCR artifacts in all entries"
+
+
 # ── DocumentRecord ────────────────────────────────────────────────────────────
 
 
@@ -59,6 +100,10 @@ def test_document_record_defaults():
     assert doc.languages == []
     assert doc.is_digital is True
     assert doc.normalised_name is None
+    assert doc.extraction_status is None
+    assert doc.force_extracted is False
+    assert doc.toc_valid is None
+    assert doc.toc_invalid_reason is None
 
 
 def test_document_record_missing_required_raises():
@@ -100,9 +145,7 @@ def test_file_stat_record_fields():
 
 
 def test_job_record_stats_defaults():
-    job = JobRecord(
-        job_id="job-1", run_at=datetime(2024, 1, 1, tzinfo=UTC), root_path="/data/pdfs"
-    )
+    job = JobRecord(job_id="job-1", run_at=datetime(2024, 1, 1, tzinfo=UTC), root_path="/data/pdfs")
     assert job.stats == JobStats()
     assert job.stats.added == 0
 

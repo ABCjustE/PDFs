@@ -6,7 +6,6 @@ import re
 import unicodedata
 
 _MAX_LEN = 120
-_ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f]")
 _NULL_ARTIFACTS = re.compile(r"[·\ufffd]")
 _WHITESPACE = re.compile(r"\s+")
@@ -44,27 +43,59 @@ def clean_text(text: str) -> str:
     return _WHITESPACE.sub(" ", cleaned).strip()
 
 
+def _replace_non_alnum(text: str) -> str:
+    return "".join(char if char.isalnum() else " " for char in text)
+
+
+def _strip_trailing_ext(text: str) -> str:
+    stripped = text.lstrip(".")
+    if "." not in stripped:
+        return text
+    stem, ext = text.rsplit(".", maxsplit=1)
+    return stem if 1 <= len(ext) <= 8 and ext.isalnum() else text
+
+
 def normalize(name: str) -> str:
-    """Return a sanitised string suitable for use as a display name.
+    """Return a deterministic display name for a document title or filename.
 
-    Strips illegal filesystem characters, collapses whitespace, removes
-    leading dots, and truncates to _MAX_LEN. Does not strip file extensions
-    or path components — callers are responsible for that.
+    Tier 1 — offline regex rules only:
 
-    Tier 1 — offline regex rules only.
+    - strip path and trailing extension
+    - replace non-alphanumeric runs with spaces
+    - collapse repeated spaces
+    - trim leading/trailing spaces
+    - title-case each token
+    - truncate to _MAX_LEN
 
     Args:
         name: Raw filename or title string.
 
     Returns:
-        Sanitised string, empty string if nothing survives.
+        Normalized display name, empty string if nothing survives.
     """
     if not name or not name.strip():
         return ""
-    result = _ILLEGAL.sub("", name)
+    result = name
+    candidate = name.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
+    if candidate != name and _strip_trailing_ext(candidate) != candidate:
+        result = candidate
+    result = _strip_trailing_ext(result)
     result = clean_text(result)
     result = _LEADING_DOTS.sub("", result).strip()
+    result = _replace_non_alnum(result)
+    result = _WHITESPACE.sub(" ", result).strip()
+    result = " ".join(part[:1].upper() + part[1:].lower() for part in result.split())
     return _truncate(result, _MAX_LEN)
+
+
+def normalize_file_name(name: str) -> str:
+    """Return a deterministic normalized PDF filename, preserving the suffix."""
+    normalized = normalize(name)
+    if not normalized:
+        return ""
+    if name.lower().endswith(".pdf"):
+        return f"{normalized}.pdf"
+    return normalized
 
 
 def normalize_llm(name: str, context: str = "") -> str:

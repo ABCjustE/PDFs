@@ -1,4 +1,4 @@
-"""Configuration — reads PDFZX_PDF_ROOT and PDFZX_JSON_DB from environment."""
+"""Configuration — reads PDFZX_* environment variables into ScanConfig."""
 
 from __future__ import annotations
 
@@ -16,6 +16,9 @@ class ScanConfig(BaseModel):
     db_path: Path
     ocr_char_threshold: int = 100
     ocr_scan_pages: int = 3
+    normalize_document_name: bool = True
+    fulltext_dir: Path = Path("./pdf_fulltext")
+    extract_text: bool = True
 
     @field_validator("root_path")
     @classmethod
@@ -58,4 +61,20 @@ def get_config() -> ScanConfig:
         msg = "PDFZX_PDF_ROOT environment variable is required"
         raise ValueError(msg)
     db = os.environ.get("PDFZX_JSON_DB", "./db.json")
-    return ScanConfig(root_path=Path(root), db_path=Path(db))
+    normalize_document_name = os.environ.get(
+        "PDFZX_ENABLE_NAME_NORMALIZATION", "true"
+    ).strip().lower() not in {"0", "false", "no", "off"}
+    fulltext = os.environ.get("PDFZX_FULLTEXT_DIR", "./pdf_fulltext")
+    extract_text = os.environ.get("PDFZX_EXTRACT_TEXT", "true").strip().lower() not in (
+        "false",
+        "0",
+        "no",
+        "off",
+    )
+    return ScanConfig(
+        root_path=Path(root),
+        db_path=Path(db),
+        normalize_document_name=normalize_document_name,
+        fulltext_dir=Path(fulltext),
+        extract_text=extract_text,
+    )

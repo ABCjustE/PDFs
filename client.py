@@ -30,11 +30,16 @@ def _default_config() -> ScanConfig:
     db = Path(os.environ.get("PDFZX_JSON_DB", Path(__file__).parent / "db.json"))
     threshold = int(os.environ.get("PDFZX_OCR_CHAR_THRESHOLD", "100"))
     scan_pages = int(os.environ.get("PDFZX_OCR_SCAN_PAGES", "3"))
+    normalize_document_name = (
+        os.environ.get("PDFZX_ENABLE_NAME_NORMALIZATION", "true").strip().lower()
+        not in {"0", "false", "no", "off"}
+    )
     return ScanConfig(
         root_path=root,
         db_path=db,
         ocr_char_threshold=threshold,
         ocr_scan_pages=scan_pages,
+        normalize_document_name=normalize_document_name,
     )
 
 
@@ -46,19 +51,8 @@ def _default_workers() -> int:
     return int(os.environ.get("PDFZX_WORKERS", "1"))
 
 
-def main() -> int:
-    _load_env()
-    default_config = _default_config()
-
-    parser = argparse.ArgumentParser(
-        description="Run pdfzx inventory on Yazi-selected targets."
-    )
-    parser.add_argument(
-        "--choice-file",
-        type=Path,
-        default=Path.cwd() / "yazi-choice.txt",
-        help="Absolute path to the Yazi chooser output file.",
-    )
+def _base_parser(default_config: ScanConfig) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run pdfzx inventory operations.")
     parser.add_argument(
         "--root",
         type=Path,
@@ -76,15 +70,57 @@ def main() -> int:
         default=_default_log_level(),
         help="Logging level for structured JSON output.",
     )
-    parser.add_argument(
+    return parser
+
+
+def main() -> int:
+    _load_env()
+    default_config = _default_config()
+
+    parser = argparse.ArgumentParser(description="Run pdfzx inventory operations.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    scan_parser = subparsers.add_parser(
+        "scan", parents=[_base_parser(default_config)], add_help=False,
+        help="Run PDF inventory on Yazi-selected targets.",
+    )
+    scan_parser.add_argument(
+        "--choice-file",
+        type=Path,
+        default=Path.cwd() / "yazi-choice.txt",
+        help="Absolute path to the Yazi chooser output file.",
+    )
+    scan_parser.add_argument(
         "--workers",
         type=int,
         default=_default_workers(),
         help="Number of parallel worker processes for PDF extraction (default 1 = serial).",
     )
+
+    subparsers.add_parser(
+        "backfill",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help="Backfill normalised_name for existing documents in db.json.",
+    )
+
     args = parser.parse_args()
 
     configure_logging(args.log_level)
+
+    config = ScanConfig(
+        root_path=args.root,
+        db_path=args.db,
+        ocr_char_threshold=default_config.ocr_char_threshold,
+        ocr_scan_pages=default_config.ocr_scan_pages,
+        normalize_document_name=default_config.normalize_document_name,
+    )
+    inventory = InventoryJob(root=config.root_path, config=config, log_level=args.log_level)
+
+    if args.command == "backfill":
+        updated = inventory.backfill_normalised_names()
+        print(json.dumps({"updated": updated, "db_path": str(config.db_path.resolve())}, indent=2))
+        return 0
 
     if not args.choice_file.exists():
         parser.error(f"choice file does not exist: {args.choice_file}")
@@ -94,15 +130,7 @@ def main() -> int:
         print("No files selected.")
         return 0
 
-    config = ScanConfig(
-        root_path=args.root,
-        db_path=args.db,
-        ocr_char_threshold=default_config.ocr_char_threshold,
-        ocr_scan_pages=default_config.ocr_scan_pages,
-    )
-    job = InventoryJob(
-        root=config.root_path, config=config, log_level=args.log_level
-    ).run(targets, workers=args.workers)
+    job = inventory.run(targets, workers=args.workers)
     print(json.dumps(job.model_dump(mode="json"), indent=2))
     return 0
 
