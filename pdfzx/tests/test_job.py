@@ -7,6 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from pdfzx.models import DocumentRecord
+from pdfzx.models import PdfMetadata
+from pdfzx.models import Registry
 from pdfzx import InventoryJob
 from pdfzx.config import ScanConfig
 
@@ -20,7 +23,11 @@ def _place(src: Path, root: Path, relative_path: str) -> Path:
 
 @pytest.fixture
 def config(pdf_root: Path, tmp_path: Path) -> ScanConfig:
-    return ScanConfig(root_path=pdf_root, db_path=tmp_path / "db.json")
+    return ScanConfig(
+        root_path=pdf_root,
+        db_path=tmp_path / "db.json",
+        sqlite3_db_path=tmp_path / "db.sqlite3",
+    )
 
 
 def test_resolve_expands_directories_and_deduplicates(
@@ -97,33 +104,22 @@ def test_run_assigns_normalised_name(make_pdf, pdf_root: Path, config: ScanConfi
 def test_backfill_normalised_names_updates_existing_registry(
     pdf_root: Path, tmp_path: Path, config: ScanConfig
 ) -> None:
-    config = ScanConfig(root_path=pdf_root, db_path=tmp_path / "db.json")
-    config.db_path.write_text(
-        """
-{
-  "documents": {
-    "abc": {
-      "sha256": "abc",
-      "md5": "def",
-      "paths": ["sample.pdf"],
-      "file_name": "advanced_python_3rd.pdf",
-      "normalised_name": null,
-      "metadata": {},
-      "toc": [],
-      "languages": [],
-      "is_digital": true,
-      "first_seen_job": null,
-      "last_seen_job": null
-    }
-  },
-  "file_stats": {},
-  "jobs": []
-}
-        """.strip(),
-        encoding="utf-8",
+    config = ScanConfig(
+        root_path=pdf_root, db_path=tmp_path / "db.json", sqlite3_db_path=tmp_path / "db.sqlite3"
     )
-
     job = InventoryJob(root=pdf_root, config=config)
+    job._storage.save(  # noqa: SLF001 - test setup uses storage directly
+        Registry(
+            documents={
+                "abc": DocumentRecord(
+                    sha256="abc",
+                    md5="def",
+                    paths=["sample.pdf"],
+                    file_name="advanced_python_3rd.pdf",
+                )
+            }
+        )
+    )
 
     assert job.backfill_normalised_names() == 1
     assert job._storage.load().documents["abc"].normalised_name == "Advanced Python 3rd.pdf"  # noqa: SLF001
@@ -132,33 +128,23 @@ def test_backfill_normalised_names_updates_existing_registry(
 def test_backfill_uses_file_name_not_metadata_title(
     pdf_root: Path, tmp_path: Path
 ) -> None:
-    config = ScanConfig(root_path=pdf_root, db_path=tmp_path / "db.json")
-    config.db_path.write_text(
-        """
-{
-  "documents": {
-    "abc": {
-      "sha256": "abc",
-      "md5": "def",
-      "paths": ["sample.pdf"],
-      "file_name": "advanced_python_3rd.pdf",
-      "normalised_name": null,
-      "metadata": {"title": "Completely Different Metadata Title"},
-      "toc": [],
-      "languages": [],
-      "is_digital": true,
-      "first_seen_job": null,
-      "last_seen_job": null
-    }
-  },
-  "file_stats": {},
-  "jobs": []
-}
-        """.strip(),
-        encoding="utf-8",
+    config = ScanConfig(
+        root_path=pdf_root, db_path=tmp_path / "db.json", sqlite3_db_path=tmp_path / "db.sqlite3"
     )
-
     job = InventoryJob(root=pdf_root, config=config)
+    job._storage.save(  # noqa: SLF001 - test setup uses storage directly
+        Registry(
+            documents={
+                "abc": DocumentRecord(
+                    sha256="abc",
+                    md5="def",
+                    paths=["sample.pdf"],
+                    file_name="advanced_python_3rd.pdf",
+                    metadata=PdfMetadata(title="Completely Different Metadata Title"),
+                )
+            }
+        )
+    )
 
     assert job.backfill_normalised_names() == 1
     assert job._storage.load().documents["abc"].normalised_name == "Advanced Python 3rd.pdf"  # noqa: SLF001

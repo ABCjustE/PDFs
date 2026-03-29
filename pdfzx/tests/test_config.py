@@ -154,3 +154,14 @@ def test_get_config_reads_online_features_and_openai_settings(
     assert config.online_features is True
     assert config.openai_api_key == "test-key"
     assert config.openai_model == "gpt-4o-mini"
+
+
+def test_get_config_reads_sqlite_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sqlite_path = tmp_path / "db.sqlite3"
+    monkeypatch.setenv("PDFZX_PDF_ROOT", str(tmp_path))
+    monkeypatch.setenv("PDFZX_JSON_DB", str(tmp_path / "db.json"))
+    monkeypatch.setenv("PDFZX_SQLITE3_DB_PATH", str(sqlite_path))
+
+    config = get_config()
+
+    assert config.sqlite3_db_path == sqlite_path.resolve()

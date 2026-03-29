@@ -22,6 +22,7 @@ class ScanConfig(BaseModel):
     online_features: bool = False
     openai_api_key: str | None = None
     openai_model: str = "gpt-4o-mini"
+    sqlite3_db_path: Path = Path("./db.sqlite3")
 
     @field_validator("root_path")
     @classmethod
@@ -46,6 +47,19 @@ class ScanConfig(BaseModel):
             raise ValueError(msg)
         if not resolved.parent.is_dir():
             msg = f"PDFZX_JSON_DB parent path is not a directory: {resolved.parent}"
+            raise ValueError(msg)
+        return resolved
+
+    @field_validator("sqlite3_db_path")
+    @classmethod
+    def sqlite_parent_must_exist(cls, v: Path) -> Path:
+        """Ensure the parent directory of sqlite3_db_path already exists."""
+        resolved = v.resolve()
+        if not resolved.parent.exists():
+            msg = f"PDFZX_SQLITE3_DB_PATH parent directory does not exist: {resolved.parent}"
+            raise ValueError(msg)
+        if not resolved.parent.is_dir():
+            msg = f"PDFZX_SQLITE3_DB_PATH parent path is not a directory: {resolved.parent}"
             raise ValueError(msg)
         return resolved
 
@@ -82,6 +96,7 @@ def get_config() -> ScanConfig:
     )
     openai_api_key = os.environ.get("PDFZX_OPENAI_API_KEY")
     openai_model = os.environ.get("PDFZX_OPENAI_MODEL", "gpt-4o-mini")
+    sqlite3_db_path = os.environ.get("PDFZX_SQLITE3_DB_PATH", "./db.sqlite3")
     return ScanConfig(
         root_path=Path(root),
         db_path=Path(db),
@@ -91,4 +106,5 @@ def get_config() -> ScanConfig:
         online_features=online_features,
         openai_api_key=openai_api_key,
         openai_model=openai_model,
+        sqlite3_db_path=Path(sqlite3_db_path),
     )

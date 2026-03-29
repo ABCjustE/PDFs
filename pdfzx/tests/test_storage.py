@@ -7,6 +7,7 @@ import pytest
 from pdfzx.models import DocumentRecord
 from pdfzx.models import Registry
 from pdfzx.storage import JsonStorage
+from pdfzx.storage import SqliteStorage
 from pdfzx.storage import Storage
 
 
@@ -22,6 +23,10 @@ def _sample_registry() -> Registry:
 
 def test_json_storage_implements_protocol(tmp_path):
     assert isinstance(JsonStorage(tmp_path / "db.json"), Storage)
+
+
+def test_sqlite_storage_implements_protocol(tmp_path):
+    assert isinstance(SqliteStorage(tmp_path / "db.sqlite3"), Storage)
 
 
 # ---------------------------------------------------------------------------
@@ -87,3 +92,24 @@ def test_save_utf8_cjk(tmp_path):
     JsonStorage(path).save(Registry(documents={"aaa": doc}))
     text = path.read_text(encoding="utf-8")
     assert "中文" in text
+
+
+def test_sqlite_load_missing_file_returns_empty(tmp_path):
+    store = SqliteStorage(tmp_path / "db.sqlite3")
+    registry = store.load()
+    assert registry.documents == {}
+    assert registry.jobs == []
+
+
+def test_sqlite_roundtrip(tmp_path):
+    path = tmp_path / "db.sqlite3"
+    original = _sample_registry()
+    SqliteStorage(path).save(original)
+    loaded = SqliteStorage(path).load()
+    assert loaded.documents["abc123"].file_name == "test.pdf"
+
+
+def test_sqlite_save_creates_file(tmp_path):
+    path = tmp_path / "db.sqlite3"
+    SqliteStorage(path).save(Registry())
+    assert path.exists()

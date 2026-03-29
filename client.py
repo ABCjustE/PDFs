@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from pdfzx import InventoryJob
 from pdfzx import configure_logging
 from pdfzx.config import ScanConfig
+from pdfzx.storage import JsonStorage
 
 
 def _load_env() -> None:
@@ -42,6 +43,7 @@ def _default_config() -> ScanConfig:
     }
     openai_api_key = os.environ.get("PDFZX_OPENAI_API_KEY")
     openai_model = os.environ.get("PDFZX_OPENAI_MODEL", "gpt-4o-mini")
+    sqlite3_db_path = Path(os.environ.get("PDFZX_SQLITE3_DB_PATH", Path(__file__).parent / "db.sqlite3"))
     return ScanConfig(
         root_path=root,
         db_path=db,
@@ -51,6 +53,7 @@ def _default_config() -> ScanConfig:
         online_features=online_features,
         openai_api_key=openai_api_key,
         openai_model=openai_model,
+        sqlite3_db_path=sqlite3_db_path,
     )
 
 
@@ -114,6 +117,35 @@ def main() -> int:
         add_help=False,
         help="Backfill normalised_name for existing documents in db.json.",
     )
+    migrate_parser = subparsers.add_parser(
+        "migrate-sqlite",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help="Import the existing db.json registry into SQLite.",
+    )
+    migrate_parser.add_argument(
+        "--sqlite-db",
+        type=Path,
+        default=default_config.sqlite3_db_path,
+        help="Target SQLite database path.",
+    )
+    migrate_parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="Replace the existing SQLite database file if it already exists.",
+    )
+    export_parser = subparsers.add_parser(
+        "export-json",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help="Export the current SQLite-backed registry to JSON.",
+    )
+    export_parser.add_argument(
+        "--json-db",
+        type=Path,
+        default=default_config.db_path,
+        help="Target JSON export path.",
+    )
 
     args = parser.parse_args()
 
@@ -128,12 +160,39 @@ def main() -> int:
         online_features=default_config.online_features,
         openai_api_key=default_config.openai_api_key,
         openai_model=default_config.openai_model,
+        sqlite3_db_path=getattr(args, "sqlite_db", default_config.sqlite3_db_path),
     )
     inventory = InventoryJob(root=config.root_path, config=config, log_level=args.log_level)
 
     if args.command == "backfill":
         updated = inventory.backfill_normalised_names()
         print(json.dumps({"updated": updated, "db_path": str(config.db_path.resolve())}, indent=2))
+        return 0
+    if args.command == "migrate-sqlite":
+        from pdfzx.db.migration import migrate_json_to_sqlite
+
+        summary = migrate_json_to_sqlite(
+            source_json=config.db_path,
+            target_sqlite=config.sqlite3_db_path,
+            replace=args.replace,
+        )
+        print(json.dumps(summary, indent=2))
+        return 0
+    if args.command == "export-json":
+        registry = inventory._storage.load()  # noqa: SLF001 - explicit export path
+        JsonStorage(args.json_db).save(registry)
+        print(
+            json.dumps(
+                {
+                    "source_sqlite": str(config.sqlite3_db_path.resolve()),
+                    "target_json": str(args.json_db.resolve()),
+                    "documents": len(registry.documents),
+                    "file_stats": len(registry.file_stats),
+                    "jobs": len(registry.jobs),
+                },
+                indent=2,
+            )
+        )
         return 0
 
     if not args.choice_file.exists():

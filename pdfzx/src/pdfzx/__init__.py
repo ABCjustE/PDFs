@@ -19,7 +19,7 @@ from pdfzx.models import JobRecord
 from pdfzx.models import Registry
 from pdfzx.normalizer import normalize_file_name
 from pdfzx.registry import run as registry_run
-from pdfzx.storage import JsonStorage
+from pdfzx.storage import SqliteStorage
 
 __all__ = ["InventoryJob", "configure_logging"]
 
@@ -92,7 +92,7 @@ class InventoryJob:
         self.root = root.resolve()
         self.config = config
         self._log_level = log_level
-        self._storage = JsonStorage(config.db_path)
+        self._storage = SqliteStorage(config.sqlite3_db_path)
         self._logger = logging.getLogger(__name__)
 
     def resolve(self, targets: list[Path]) -> list[Path]:

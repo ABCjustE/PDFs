@@ -19,7 +19,7 @@ Stable Pydantic V2 contract for all modules.
 
 **`config.py`**
 - `ScanConfig` — root_path, db_path, ocr_char_threshold=100, ocr_scan_pages=3,
-  fulltext_dir=./pdf_fulltext, extract_text=True
+  fulltext_dir=./pdf_fulltext, extract_text=True, sqlite3_db_path=./db.sqlite3
 - `get_config()` — reads all `PDFZX_*` env vars including `PDFZX_FULLTEXT_DIR`
   and `PDFZX_EXTRACT_TEXT`, re-reads on every call
 
@@ -79,6 +79,14 @@ Single public function `process_pdf(path, root, config) → DocumentRecord`.
 - `Storage` Protocol — `load() → Registry`, `save(registry) → None`
 - `JsonStorage` — concrete implementation; returns empty `Registry` if file absent;
   raises `ValueError` on corrupt JSON or schema mismatch
+- `SqliteStorage` — current primary runtime storage; reconstructs/saves canonical
+  `Registry` via SQLite instead of writing `db.json`
+
+**Key decisions:**
+- SQLite is now the primary store for Phase 1 scan/backfill
+- JSON is retained as an import/export format, not the live write target
+- `SqliteStorage.save()` currently rewrites from the canonical `Registry` state, which keeps
+  the existing `registry.py` contract stable during the storage migration
 
 ---
 
@@ -166,8 +174,12 @@ path disappearance plus reappearance of the same content hash at another path.
 
 ### Step 7 — `__init__.py`
 - `configure_logging(level)` — dictConfig JSON formatter to stdout
-- `run_inventory(config)` — discovers PDFs via `rglob`, processes each, normalises name,
-  runs registry merge; errors per-file are logged and skipped, not fatal
+- `InventoryJob` — resolves selected targets, processes PDFs, normalises names, and now
+  persists Phase 1 state through `SqliteStorage`
+
+**Key decisions:**
+- batch scan and `backfill` now operate on SQLite-backed data
+- `db.json` is no longer updated by normal scan runs
 
 ---
 
@@ -181,6 +193,12 @@ Phase 2 stub only. `enrich(record)` raises `NotImplementedError`.
 - `pyproject.toml` — `TC001` added to ruff ignore (runtime imports); mypy overrides for
   `pymupdf` and `langdetect` (untyped C extensions); `[per-file-ignores]` for test files
 - `AGENTS.md` — Code Style Conformance section added
+- `client.py` commands:
+  - `scan` — reads chooser file and writes Phase 1 results to SQLite
+  - `backfill` — updates `normalised_name` from SQLite-backed records
+  - `migrate-sqlite` — imports legacy `db.json` into SQLite
+  - `export-json` — exports the current SQLite-backed registry to JSON
+- `pdfzx.db.*` — SQLAlchemy ORM base/models/session plus JSON→SQLite migration logic
 
 ---
 
@@ -193,10 +211,11 @@ Phase 2 stub only. `enrich(record)` raises `NotImplementedError`.
 | `utils.py` | 10 | 95% |
 | `inventory.py` | 10 | 96% |
 | `normalizer.py` | 11 | 98% |
-| `storage.py` | 8 | 100% |
+| `storage.py` | 12 | 100% |
 | `registry.py` | 9 | 100% |
+| `db/migration.py` | 2 | 100% |
 
-**96 passing, 0 failing, 93% total coverage**
+**36 focused backend tests passing for the SQLite cutover path**
 
 ---
 
@@ -208,6 +227,8 @@ Phase 2 stub only. `enrich(record)` raises `NotImplementedError`.
 - `inventory.py` lines 66–68 (pymupdf open exception) not covered — requires a corrupt PDF
 - `__init__.py` `run_inventory()` not covered by unit tests — integration-level entrypoint
 - `pipeline.py` not covered — Phase 2 stub, deferred
+- current SQLite persistence still adapts the existing full-`Registry` load/save contract;
+  repository-style relational CRUD is planned later for Phase 2 prompt/suggestion workflows
 
 ---
 
