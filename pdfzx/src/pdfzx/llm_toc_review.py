@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from openai import OpenAI
+from sqlalchemy.orm import Session
 
 from pdfzx.config import DEFAULT_LLM_MAX_TOC_ENTRIES
+from pdfzx.db.models import Document
+from pdfzx.db.session import create_sqlite_engine
 from pdfzx.llm.workflows.base import ProbeSuggestionResult
 from pdfzx.llm.workflows.base import probe_prompt_workflow
 from pdfzx.llm.workflows.toc_review_suggestion import TocReviewSuggestionWorkflow
@@ -21,6 +24,22 @@ def probe_toc_review_suggestion(  # noqa: PLR0913
     client: OpenAI | None = None,
 ) -> ProbeSuggestionResult:
     """Probe the ToC-review prompt against one stored document."""
+    engine = create_sqlite_engine(sqlite_db_path)
+    try:
+        with Session(engine) as session:
+            document = session.get(Document, sha256)
+            if document is not None and not document.toc_entries:
+                return ProbeSuggestionResult(
+                    should_request=False,
+                    reason="document has no ToC entries to review",
+                    prompt_id=None,
+                    prompt_input=None,
+                    parsed_response=None,
+                    persisted=False,
+                )
+    finally:
+        engine.dispose()
+
     return probe_prompt_workflow(
         workflow=TocReviewSuggestionWorkflow(max_toc_entries=max_toc_entries),
         sqlite_db_path=sqlite_db_path,

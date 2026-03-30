@@ -10,7 +10,7 @@ from pdfzx.prompts._shared import build_system_prompt
 from pdfzx.prompts._shared import dump_prompt_input
 
 LLM_DOCUMENT_SUGGESTION_WORKFLOW = "llm_document_suggestion"
-LLM_DOCUMENT_SUGGESTION_PROMPT_VERSION = "v1"
+LLM_DOCUMENT_SUGGESTION_PROMPT_VERSION = "v2"
 
 LLM_DOCUMENT_SUGGESTION_SYSTEM_PROMPT = build_system_prompt(
     role="You are assisting with PDF catalog cleanup and normalization.",
@@ -24,6 +24,15 @@ LLM_DOCUMENT_SUGGESTION_SYSTEM_PROMPT = build_system_prompt(
     rules=[
         "`suggested_file_name` must be a conservative rename target for the PDF file.",
         "keep the `.pdf` suffix.",
+        (
+            "if author names are present in the file name or normalised name, extract "
+            "them into `suggested_author` instead of dropping them silently, likewise for publisher"
+            " or edition clues"
+        ),
+        (
+            "`suggested_author` may contain multiple author names as one string, joined "
+            "by comma and space in reading order"
+        ),
         (
             "follow the same style as `normalised_name`: use spaces between words, "
             "not underscores; use title-style capitalization; preserve the core "

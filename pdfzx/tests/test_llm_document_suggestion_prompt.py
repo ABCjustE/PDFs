@@ -60,5 +60,6 @@ def test_document_suggestion_response_schema_accepts_expected_shape() -> None:
 
 
 def test_prompt_constants_are_defined() -> None:
-    assert LLM_DOCUMENT_SUGGESTION_PROMPT_VERSION == "v1"
+    assert LLM_DOCUMENT_SUGGESTION_PROMPT_VERSION == "v2"
     assert "Do not use or infer any hidden full text" in LLM_DOCUMENT_SUGGESTION_SYSTEM_PROMPT
+    assert "extract them into `suggested_author`" in LLM_DOCUMENT_SUGGESTION_SYSTEM_PROMPT

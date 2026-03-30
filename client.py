@@ -276,7 +276,6 @@ def main() -> int:  # noqa: PLR0911,PLR0915
             openai_model=config.openai_model,
             persist=args.persist,
             force=args.force,
-            max_toc_entries=config.llm_max_toc_entries,
         )
         _emit_json(
             {

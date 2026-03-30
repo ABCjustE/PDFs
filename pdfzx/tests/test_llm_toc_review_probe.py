@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 from sqlalchemy.orm import Session
 
 from pdfzx.config import DEFAULT_LLM_MAX_TOC_ENTRIES
@@ -138,7 +137,7 @@ def test_probe_toc_review_skips_existing_same_prompt(tmp_path) -> None:
     assert len(fake_client.responses.calls) == 1
 
 
-def test_probe_toc_review_rejects_document_without_toc(tmp_path) -> None:
+def test_probe_toc_review_skips_document_without_toc(tmp_path) -> None:
     db_path = tmp_path / "db.sqlite3"
     init_sqlite_db(db_path)
     engine = create_sqlite_engine(db_path)
@@ -159,21 +158,26 @@ def test_probe_toc_review_rejects_document_without_toc(tmp_path) -> None:
     finally:
         engine.dispose()
 
-    with pytest.raises(ValueError, match="does not have ToC entries to review"):
-        probe_toc_review_suggestion(
-            sqlite_db_path=db_path,
-            sha256="empty",
-            online_features=True,
-            openai_api_key="test-key",
-            openai_model="gpt-4o-mini",
-            client=_FakeClient(
-                LlmTocReviewSuggestionResponse(
-                    toc_is_valid=True,
-                    toc_matches_document=True,
-                    preface_page=None,
-                    preface_label=None,
-                    confidence=0.5,
-                    reasoning_summary="unused",
-                )
-            ),
-        )
+    result = probe_toc_review_suggestion(
+        sqlite_db_path=db_path,
+        sha256="empty",
+        online_features=True,
+        openai_api_key="test-key",
+        openai_model="gpt-4o-mini",
+        client=_FakeClient(
+            LlmTocReviewSuggestionResponse(
+                toc_is_valid=True,
+                toc_matches_document=True,
+                preface_page=None,
+                preface_label=None,
+                confidence=0.5,
+                reasoning_summary="unused",
+            )
+        ),
+    )
+
+    assert result.should_request is False
+    assert result.reason == "document has no ToC entries to review"
+    assert result.prompt_input is None
+    assert result.parsed_response is None
+    assert result.persisted is False
