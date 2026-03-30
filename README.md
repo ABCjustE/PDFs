@@ -68,7 +68,7 @@ Notes:
 
 ## Run
 
-`client.py` now has five explicit commands:
+`client.py` now has explicit commands for import, scan, export, and LLM probing:
 
 - `migrate-sqlite`
   - import the legacy `db.json` registry into SQLite
@@ -85,6 +85,12 @@ Notes:
   - run the document-suggestion prompt against one document in SQLite
   - inspect `prompt_input` and validated `parsed_response`
   - respects the duplicate gate by default
+- `probe-taxonomy`
+  - run the taxonomy prompt against one document in SQLite
+  - classify subject path and document type
+- `probe-toc-review`
+  - run the ToC-review prompt against one document in SQLite
+  - judge ToC validity, topical relevance, and likely preface page
 
 Storage roles:
 
@@ -125,6 +131,7 @@ Notes:
 - `probe-llm --persist` stores the validated suggestion
 - `probe-llm --force` bypasses the same-doc same-prompt duplicate gate
 - `probe-taxonomy` uses `PDFZX_LLM_MAX_TOC_ENTRIES` to cap ToC evidence sent to the model
+- `probe-toc-review` uses the same ToC cap and keeps suggestions separate from canonical document fields
 
 Example with explicit args:
 
@@ -154,6 +161,12 @@ Probe and persist one validated suggestion:
 
 ```bash
 pdfzx/.venv/bin/python client.py probe-llm --sha256 <sha256> --persist
+```
+
+Probe one document against the ToC-review prompt:
+
+```bash
+pdfzx/.venv/bin/python client.py probe-toc-review --sha256 <sha256>
 ```
 
 ## Test

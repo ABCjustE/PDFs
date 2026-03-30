@@ -8,16 +8,26 @@ from pdfzx.prompts.llm_taxonomy_suggestion import LlmTaxonomySuggestionPromptInp
 from pdfzx.prompts.llm_taxonomy_suggestion import LlmTaxonomySuggestionResponse
 from pdfzx.prompts.llm_taxonomy_suggestion import build_taxonomy_suggestion_prompt_input
 from pdfzx.prompts.llm_taxonomy_suggestion import build_taxonomy_suggestion_user_prompt
+from pdfzx.prompts.llm_toc_review_suggestion import LLM_TOC_REVIEW_SUGGESTION_PROMPT_VERSION
+from pdfzx.prompts.llm_toc_review_suggestion import LlmTocReviewSuggestionPromptInput
+from pdfzx.prompts.llm_toc_review_suggestion import LlmTocReviewSuggestionResponse
+from pdfzx.prompts.llm_toc_review_suggestion import build_toc_review_suggestion_prompt_input
+from pdfzx.prompts.llm_toc_review_suggestion import build_toc_review_suggestion_user_prompt
 
 __all__ = [
     "LLM_DOCUMENT_SUGGESTION_PROMPT_VERSION",
     "LLM_TAXONOMY_SUGGESTION_PROMPT_VERSION",
+    "LLM_TOC_REVIEW_SUGGESTION_PROMPT_VERSION",
     "LlmDocumentSuggestionPromptInput",
     "LlmDocumentSuggestionResponse",
     "LlmTaxonomySuggestionPromptInput",
     "LlmTaxonomySuggestionResponse",
+    "LlmTocReviewSuggestionPromptInput",
+    "LlmTocReviewSuggestionResponse",
     "build_document_suggestion_prompt_input",
     "build_document_suggestion_user_prompt",
     "build_taxonomy_suggestion_prompt_input",
     "build_taxonomy_suggestion_user_prompt",
+    "build_toc_review_suggestion_prompt_input",
+    "build_toc_review_suggestion_user_prompt",
 ]

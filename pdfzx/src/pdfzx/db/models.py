@@ -57,6 +57,9 @@ class Document(Base):
     llm_taxonomy_suggestions: Mapped[list[LlmTaxonomySuggestion]] = relationship(
         back_populates="document"
     )
+    llm_toc_review_suggestions: Mapped[list[LlmTocReviewSuggestion]] = relationship(
+        back_populates="document"
+    )
 
 
 class DocumentPath(Base):
@@ -143,6 +146,9 @@ class Prompt(Base):
     taxonomy_suggestions: Mapped[list[LlmTaxonomySuggestion]] = relationship(
         back_populates="prompt"
     )
+    toc_review_suggestions: Mapped[list[LlmTocReviewSuggestion]] = relationship(
+        back_populates="prompt"
+    )
 
 
 class PromptSuggestionMixin:
@@ -190,3 +196,23 @@ class LlmTaxonomySuggestion(PromptSuggestionMixin, Base):
 
     document: Mapped[Document] = relationship(back_populates="llm_taxonomy_suggestions")
     prompt: Mapped[Prompt] = relationship(back_populates="taxonomy_suggestions")
+
+
+class LlmTocReviewSuggestion(PromptSuggestionMixin, Base):
+    """Structured ToC review suggestion for one document and prompt."""
+
+    __tablename__ = "llm_toc_review_suggestions"
+    __table_args__ = (UniqueConstraint("sha256", "prompt_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    sha256: Mapped[str] = mapped_column(ForeignKey("documents.sha256"), nullable=False, index=True)
+    prompt_id: Mapped[int] = mapped_column(ForeignKey("prompts.id"), nullable=False, index=True)
+    toc_is_valid: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    toc_matches_document: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    toc_invalid_reason: Mapped[str | None] = mapped_column(Text)
+    preface_page: Mapped[int | None] = mapped_column(Integer)
+    preface_label: Mapped[str | None] = mapped_column(String(256))
+    confidence: Mapped[float | None] = mapped_column(Float)
+
+    document: Mapped[Document] = relationship(back_populates="llm_toc_review_suggestions")
+    prompt: Mapped[Prompt] = relationship(back_populates="toc_review_suggestions")

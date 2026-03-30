@@ -17,6 +17,7 @@ from pdfzx.config import ScanConfig
 from pdfzx.db.migration import migrate_json_to_sqlite
 from pdfzx.llm_suggestion import probe_document_suggestion
 from pdfzx.llm_taxonomy import probe_taxonomy_suggestion
+from pdfzx.llm_toc_review import probe_toc_review_suggestion
 from pdfzx.storage import JsonStorage
 
 
@@ -109,7 +110,7 @@ def _emit_text(message: str) -> None:
     sys.stdout.write(f"{message}\n")
 
 
-def main() -> int:  # noqa: PLR0911
+def main() -> int:  # noqa: PLR0911,PLR0915
     """Run the pdfzx user script entrypoint."""
     _load_env()
     default_config = _default_config()
@@ -203,6 +204,25 @@ def main() -> int:  # noqa: PLR0911
         action="store_true",
         help="Bypass the duplicate taxonomy gate and send the request anyway.",
     )
+    toc_review_probe_parser = subparsers.add_parser(
+        "probe-toc-review",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help="Probe one document against the ToC-review prompt and inspect input/output.",
+    )
+    toc_review_probe_parser.add_argument(
+        "--sha256", required=True, help="Document sha256 to probe."
+    )
+    toc_review_probe_parser.add_argument(
+        "--persist",
+        action="store_true",
+        help="Persist the validated ToC-review suggestion if the probe succeeds.",
+    )
+    toc_review_probe_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Bypass the duplicate ToC-review gate and send the request anyway.",
+    )
 
     args = parser.parse_args()
 
@@ -271,6 +291,28 @@ def main() -> int:  # noqa: PLR0911
         return 0
     if args.command == "probe-taxonomy":
         result = probe_taxonomy_suggestion(
+            sqlite_db_path=config.sqlite3_db_path,
+            sha256=args.sha256,
+            online_features=config.online_features,
+            openai_api_key=config.openai_api_key,
+            openai_model=config.openai_model,
+            persist=args.persist,
+            force=args.force,
+            max_toc_entries=config.llm_max_toc_entries,
+        )
+        _emit_json(
+            {
+                "should_request": result.should_request,
+                "reason": result.reason,
+                "prompt_id": result.prompt_id,
+                "prompt_input": result.prompt_input,
+                "parsed_response": result.parsed_response,
+                "persisted": result.persisted,
+            }
+        )
+        return 0
+    if args.command == "probe-toc-review":
+        result = probe_toc_review_suggestion(
             sqlite_db_path=config.sqlite3_db_path,
             sha256=args.sha256,
             online_features=config.online_features,
