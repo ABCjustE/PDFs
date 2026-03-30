@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from openai import OpenAI
 
+from pdfzx.config import DEFAULT_LLM_MAX_TOC_ENTRIES
 from pdfzx.llm.workflows.base import ProbeSuggestionResult
 from pdfzx.llm.workflows.base import probe_prompt_workflow
-from pdfzx.llm.workflows.document_suggestion import DocumentSuggestionWorkflow
+from pdfzx.llm.workflows.taxonomy_suggestion import TaxonomySuggestionWorkflow
 
 
-def probe_document_suggestion(  # noqa: PLR0913
+def probe_taxonomy_suggestion(  # noqa: PLR0913
     *,
     sqlite_db_path,
     sha256: str,
@@ -16,11 +17,12 @@ def probe_document_suggestion(  # noqa: PLR0913
     openai_model: str,
     persist: bool = False,
     force: bool = False,
+    max_toc_entries: int = DEFAULT_LLM_MAX_TOC_ENTRIES,
     client: OpenAI | None = None,
 ) -> ProbeSuggestionResult:
-    """Probe the document-suggestion prompt against one stored document."""
+    """Probe the taxonomy-suggestion prompt against one stored document."""
     return probe_prompt_workflow(
-        workflow=DocumentSuggestionWorkflow(),
+        workflow=TaxonomySuggestionWorkflow(max_toc_entries=max_toc_entries),
         sqlite_db_path=sqlite_db_path,
         sha256=sha256,
         online_features=online_features,

@@ -145,7 +145,17 @@ class Prompt(Base):
     )
 
 
-class LlmDocumentSuggestion(Base):
+class PromptSuggestionMixin:
+    """Shared lifecycle fields for prompt-backed suggestion tables."""
+
+    reasoning_summary: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    applied: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+
+
+class LlmDocumentSuggestion(PromptSuggestionMixin, Base):
     """Structured LLM suggestion for one document and prompt."""
 
     __tablename__ = "llm_document_suggestions"
@@ -159,17 +169,12 @@ class LlmDocumentSuggestion(Base):
     suggested_publisher: Mapped[str | None] = mapped_column(String(512))
     suggested_edition: Mapped[str | None] = mapped_column(String(256))
     suggested_labels_json: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
-    reasoning_summary: Mapped[str | None] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
-    applied: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
 
     document: Mapped[Document] = relationship(back_populates="llm_document_suggestions")
     prompt: Mapped[Prompt] = relationship(back_populates="document_suggestions")
 
 
-class LlmTaxonomySuggestion(Base):
+class LlmTaxonomySuggestion(PromptSuggestionMixin, Base):
     """Structured taxonomy suggestion for one document and prompt."""
 
     __tablename__ = "llm_taxonomy_suggestions"
@@ -179,12 +184,9 @@ class LlmTaxonomySuggestion(Base):
     sha256: Mapped[str] = mapped_column(ForeignKey("documents.sha256"), nullable=False, index=True)
     prompt_id: Mapped[int] = mapped_column(ForeignKey("prompts.id"), nullable=False, index=True)
     suggested_taxonomy_path: Mapped[str | None] = mapped_column(String(1024))
+    suggested_document_type: Mapped[str | None] = mapped_column(String(64))
+    suggested_new_subcategory: Mapped[str | None] = mapped_column(String(256))
     confidence: Mapped[float | None] = mapped_column(Float)
-    reasoning_summary: Mapped[str | None] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
-    applied: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
 
     document: Mapped[Document] = relationship(back_populates="llm_taxonomy_suggestions")
     prompt: Mapped[Prompt] = relationship(back_populates="taxonomy_suggestions")

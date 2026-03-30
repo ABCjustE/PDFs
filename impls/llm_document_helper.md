@@ -9,7 +9,54 @@ The backend contract now has three layers for document suggestions:
 3. idempotency gate
 4. single-document probe flow
 
+The first workflow now also sits on a shared LLM workflow architecture instead of a
+document-specific probe implementation.
+
 No OpenAI API call orchestration is implemented yet.
+
+## Shared Workflow Architecture
+
+Implemented in:
+
+- [prompt_backed_suggestion.py](../pdfzx/src/pdfzx/db/services/prompt_backed_suggestion.py)
+- [base.py](../pdfzx/src/pdfzx/llm/workflows/base.py)
+- [document_suggestion.py](../pdfzx/src/pdfzx/llm/workflows/document_suggestion.py)
+
+Current split:
+
+- shared service layer
+  - prompt registration
+  - `(sha256, prompt_id)` duplicate gate
+  - response persistence against an existing document
+- shared probe runner
+  - load document from SQLite
+  - build structured prompt input
+  - call OpenAI structured output
+  - optionally persist validated response
+- workflow definition
+  - system prompt
+  - input builder
+  - user-prompt serializer
+  - response model
+  - workflow-specific service wiring
+
+This means `document suggestion` is now the first concrete implementation of a reusable
+workflow pattern rather than a one-off path.
+
+Why this matters:
+
+- taxonomy suggestion can reuse the same probe/batch skeleton
+- ToC review suggestion can reuse the same probe/batch skeleton
+- prompt/version gating stays uniform across workflows
+- future batch commands can share the same orchestration style
+
+Current reusable objects:
+
+- `PromptBackedSuggestionService`
+- `SuggestionDecision`
+- `PromptWorkflowDefinition`
+- `probe_prompt_workflow(...)`
+- `ProbeSuggestionResult`
 
 ## Prompt Contract
 

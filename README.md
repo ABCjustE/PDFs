@@ -29,6 +29,7 @@ Important env knobs:
 - `PDFZX_ONLINE_FEATURES`
 - `PDFZX_OPENAI_API_KEY`
 - `PDFZX_OPENAI_MODEL`
+- `PDFZX_LLM_MAX_TOC_ENTRIES`
 
 ## Schema
 
@@ -114,6 +115,7 @@ Notes:
   - a target document `--sha256`
 - `probe-llm --persist` stores the validated suggestion
 - `probe-llm --force` bypasses the same-doc same-prompt duplicate gate
+- `probe-taxonomy` uses `PDFZX_LLM_MAX_TOC_ENTRIES` to cap ToC evidence sent to the model
 
 Example with explicit args:
 

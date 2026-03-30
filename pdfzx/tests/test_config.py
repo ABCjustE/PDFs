@@ -165,3 +165,15 @@ def test_get_config_reads_sqlite_path(tmp_path: Path, monkeypatch: pytest.Monkey
     config = get_config()
 
     assert config.sqlite3_db_path == sqlite_path.resolve()
+
+
+def test_get_config_reads_llm_max_toc_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PDFZX_PDF_ROOT", str(tmp_path))
+    monkeypatch.setenv("PDFZX_JSON_DB", str(tmp_path / "db.json"))
+    monkeypatch.setenv("PDFZX_LLM_MAX_TOC_ENTRIES", "12")
+
+    config = get_config()
+
+    assert config.llm_max_toc_entries == 12

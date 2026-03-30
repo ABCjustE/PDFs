@@ -8,6 +8,8 @@ from pathlib import Path
 from pydantic import BaseModel
 from pydantic import field_validator
 
+DEFAULT_LLM_MAX_TOC_ENTRIES = 30
+
 
 class ScanConfig(BaseModel):
     """Validated runtime configuration for a scan."""
@@ -23,6 +25,7 @@ class ScanConfig(BaseModel):
     openai_api_key: str | None = None
     openai_model: str = "gpt-4o-mini"
     sqlite3_db_path: Path = Path("./db.sqlite3")
+    llm_max_toc_entries: int = DEFAULT_LLM_MAX_TOC_ENTRIES
 
     @field_validator("root_path")
     @classmethod
@@ -97,6 +100,11 @@ def get_config() -> ScanConfig:
     openai_api_key = os.environ.get("PDFZX_OPENAI_API_KEY")
     openai_model = os.environ.get("PDFZX_OPENAI_MODEL", "gpt-4o-mini")
     sqlite3_db_path = os.environ.get("PDFZX_SQLITE3_DB_PATH", "./db.sqlite3")
+    llm_max_toc_entries = int(
+        os.environ.get(
+            "PDFZX_LLM_MAX_TOC_ENTRIES", str(DEFAULT_LLM_MAX_TOC_ENTRIES)
+        )
+    )
     return ScanConfig(
         root_path=Path(root),
         db_path=Path(db),
@@ -107,4 +115,5 @@ def get_config() -> ScanConfig:
         openai_api_key=openai_api_key,
         openai_model=openai_model,
         sqlite3_db_path=Path(sqlite3_db_path),
+        llm_max_toc_entries=llm_max_toc_entries,
     )

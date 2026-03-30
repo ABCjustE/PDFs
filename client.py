@@ -5,13 +5,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
+
 from pdfzx import InventoryJob
 from pdfzx import configure_logging
+from pdfzx.config import DEFAULT_LLM_MAX_TOC_ENTRIES
 from pdfzx.config import ScanConfig
+from pdfzx.db.migration import migrate_json_to_sqlite
 from pdfzx.llm_suggestion import probe_document_suggestion
+from pdfzx.llm_taxonomy import probe_taxonomy_suggestion
 from pdfzx.storage import JsonStorage
 
 
@@ -44,7 +49,14 @@ def _default_config() -> ScanConfig:
     }
     openai_api_key = os.environ.get("PDFZX_OPENAI_API_KEY")
     openai_model = os.environ.get("PDFZX_OPENAI_MODEL", "gpt-4o-mini")
-    sqlite3_db_path = Path(os.environ.get("PDFZX_SQLITE3_DB_PATH", Path(__file__).parent / "db.sqlite3"))
+    sqlite3_db_path = Path(
+        os.environ.get("PDFZX_SQLITE3_DB_PATH", Path(__file__).parent / "db.sqlite3")
+    )
+    llm_max_toc_entries = int(
+        os.environ.get(
+            "PDFZX_LLM_MAX_TOC_ENTRIES", str(DEFAULT_LLM_MAX_TOC_ENTRIES)
+        )
+    )
     return ScanConfig(
         root_path=root,
         db_path=db,
@@ -55,6 +67,7 @@ def _default_config() -> ScanConfig:
         openai_api_key=openai_api_key,
         openai_model=openai_model,
         sqlite3_db_path=sqlite3_db_path,
+        llm_max_toc_entries=llm_max_toc_entries,
     )
 
 
@@ -88,7 +101,16 @@ def _base_parser(default_config: ScanConfig) -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> int:
+def _emit_json(payload: object) -> None:
+    sys.stdout.write(f"{json.dumps(payload, indent=2, ensure_ascii=False)}\n")
+
+
+def _emit_text(message: str) -> None:
+    sys.stdout.write(f"{message}\n")
+
+
+def main() -> int:  # noqa: PLR0911
+    """Run the pdfzx user script entrypoint."""
     _load_env()
     default_config = _default_config()
 
@@ -164,6 +186,23 @@ def main() -> int:
         action="store_true",
         help="Bypass the duplicate suggestion gate and send the request anyway.",
     )
+    taxonomy_probe_parser = subparsers.add_parser(
+        "probe-taxonomy",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help="Probe one document against the taxonomy prompt and inspect input/output.",
+    )
+    taxonomy_probe_parser.add_argument("--sha256", required=True, help="Document sha256 to probe.")
+    taxonomy_probe_parser.add_argument(
+        "--persist",
+        action="store_true",
+        help="Persist the validated taxonomy suggestion if the probe succeeds.",
+    )
+    taxonomy_probe_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Bypass the duplicate taxonomy gate and send the request anyway.",
+    )
 
     args = parser.parse_args()
 
@@ -179,37 +218,33 @@ def main() -> int:
         openai_api_key=default_config.openai_api_key,
         openai_model=default_config.openai_model,
         sqlite3_db_path=getattr(args, "sqlite_db", default_config.sqlite3_db_path),
+        llm_max_toc_entries=default_config.llm_max_toc_entries,
     )
     inventory = InventoryJob(root=config.root_path, config=config, log_level=args.log_level)
 
     if args.command == "backfill":
         updated = inventory.backfill_normalised_names()
-        print(json.dumps({"updated": updated, "db_path": str(config.db_path.resolve())}, indent=2))
+        _emit_json({"updated": updated, "db_path": str(config.db_path.resolve())})
         return 0
     if args.command == "migrate-sqlite":
-        from pdfzx.db.migration import migrate_json_to_sqlite
-
         summary = migrate_json_to_sqlite(
             source_json=config.db_path,
             target_sqlite=config.sqlite3_db_path,
             replace=args.replace,
         )
-        print(json.dumps(summary, indent=2))
+        _emit_json(summary)
         return 0
     if args.command == "export-json":
         registry = inventory._storage.load()  # noqa: SLF001 - explicit export path
         JsonStorage(args.json_db).save(registry)
-        print(
-            json.dumps(
-                {
-                    "source_sqlite": str(config.sqlite3_db_path.resolve()),
-                    "target_json": str(args.json_db.resolve()),
-                    "documents": len(registry.documents),
-                    "file_stats": len(registry.file_stats),
-                    "jobs": len(registry.jobs),
-                },
-                indent=2,
-            )
+        _emit_json(
+            {
+                "source_sqlite": str(config.sqlite3_db_path.resolve()),
+                "target_json": str(args.json_db.resolve()),
+                "documents": len(registry.documents),
+                "file_stats": len(registry.file_stats),
+                "jobs": len(registry.jobs),
+            }
         )
         return 0
     if args.command == "probe-llm":
@@ -221,20 +256,39 @@ def main() -> int:
             openai_model=config.openai_model,
             persist=args.persist,
             force=args.force,
+            max_toc_entries=config.llm_max_toc_entries,
         )
-        print(
-            json.dumps(
-                {
-                    "should_request": result.should_request,
-                    "reason": result.reason,
-                    "prompt_id": result.prompt_id,
-                    "prompt_input": result.prompt_input,
-                    "parsed_response": result.parsed_response,
-                    "persisted": result.persisted,
-                },
-                indent=2,
-                ensure_ascii=False,
-            )
+        _emit_json(
+            {
+                "should_request": result.should_request,
+                "reason": result.reason,
+                "prompt_id": result.prompt_id,
+                "prompt_input": result.prompt_input,
+                "parsed_response": result.parsed_response,
+                "persisted": result.persisted,
+            }
+        )
+        return 0
+    if args.command == "probe-taxonomy":
+        result = probe_taxonomy_suggestion(
+            sqlite_db_path=config.sqlite3_db_path,
+            sha256=args.sha256,
+            online_features=config.online_features,
+            openai_api_key=config.openai_api_key,
+            openai_model=config.openai_model,
+            persist=args.persist,
+            force=args.force,
+            max_toc_entries=config.llm_max_toc_entries,
+        )
+        _emit_json(
+            {
+                "should_request": result.should_request,
+                "reason": result.reason,
+                "prompt_id": result.prompt_id,
+                "prompt_input": result.prompt_input,
+                "parsed_response": result.parsed_response,
+                "persisted": result.persisted,
+            }
         )
         return 0
 
@@ -243,11 +297,11 @@ def main() -> int:
 
     targets = _read_choice_file(args.choice_file)
     if not targets:
-        print("No files selected.")
+        _emit_text("No files selected.")
         return 0
 
     job = inventory.run(targets, workers=args.workers)
-    print(json.dumps(job.model_dump(mode="json"), indent=2))
+    _emit_json(job.model_dump(mode="json"))
     return 0
 
 
