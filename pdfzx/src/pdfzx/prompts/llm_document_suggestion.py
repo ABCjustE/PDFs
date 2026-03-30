@@ -1,46 +1,47 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from pydantic import BaseModel
 from pydantic import Field
 
 from pdfzx.models import DocumentRecord
+from pdfzx.prompts._shared import build_system_prompt
+from pdfzx.prompts._shared import dump_prompt_input
 
 LLM_DOCUMENT_SUGGESTION_WORKFLOW = "llm_document_suggestion"
 LLM_DOCUMENT_SUGGESTION_PROMPT_VERSION = "v1"
 
-LLM_DOCUMENT_SUGGESTION_SYSTEM_PROMPT = """
-You are assisting with PDF catalog cleanup and normalization.
-
-You will receive only basic document facts. Do not use or infer any hidden full text.
-
-Goals:
-- identify the proper book/document title internally
-- separate probable author, publisher, and edition information when present
-- suggest a concise filename-oriented rename target
-- assign a small set of useful labels
-
-Rules:
-- `suggested_file_name` must be a conservative rename target for the PDF file.
-- keep the `.pdf` suffix.
-- follow the same style as `normalised_name`:
-  - use spaces between words, not underscores
-  - use title-style capitalization
-  - preserve the core title wording unless obvious filename noise is removed
-- remove obvious filename noise when present:
-  - prefixed or appended author names
-  - publisher or source tags
-  - edition or revision markers
-  - bracketed upload or site junk
-- do not aggressively rewrite the title into a different naming scheme
-- use only the supplied fields
-- do not invent missing facts
-- keep output strictly as JSON matching the requested schema
-- keep labels short and lowercase
-- if a field is unknown, return null
-""".strip()
+LLM_DOCUMENT_SUGGESTION_SYSTEM_PROMPT = build_system_prompt(
+    role="You are assisting with PDF catalog cleanup and normalization.",
+    input_scope="basic document facts",
+    goals=[
+        "identify the proper book/document title internally",
+        "separate probable author, publisher, and edition information when present",
+        "suggest a concise filename-oriented rename target",
+        "assign a small set of useful labels",
+    ],
+    rules=[
+        "`suggested_file_name` must be a conservative rename target for the PDF file.",
+        "keep the `.pdf` suffix.",
+        (
+            "follow the same style as `normalised_name`: use spaces between words, "
+            "not underscores; use title-style capitalization; preserve the core "
+            "title wording unless obvious filename noise is removed"
+        ),
+        (
+            "remove obvious filename noise when present: prefixed or appended author "
+            "names, publisher or source tags, edition or revision markers, bracketed "
+            "upload or site junk"
+        ),
+        "do not aggressively rewrite the title into a different naming scheme",
+        "use only the supplied fields",
+        "do not invent missing facts",
+        "keep output strictly as JSON matching the requested schema",
+        "keep labels short and lowercase",
+        "if a field is unknown, return null",
+    ],
+)
 
 
 class LlmDocumentSuggestionPromptInput(BaseModel):
@@ -93,4 +94,4 @@ def build_document_suggestion_prompt_input(
 
 def build_document_suggestion_user_prompt(prompt_input: LlmDocumentSuggestionPromptInput) -> str:
     """Serialize prompt input for the LLM user message."""
-    return json.dumps(prompt_input.model_dump(mode="json"), ensure_ascii=False, indent=2)
+    return dump_prompt_input(prompt_input)

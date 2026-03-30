@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from pydantic import BaseModel
@@ -8,6 +7,8 @@ from pydantic import Field
 
 from pdfzx.config import DEFAULT_LLM_MAX_TOC_ENTRIES
 from pdfzx.models import DocumentRecord
+from pdfzx.prompts._shared import build_system_prompt
+from pdfzx.prompts._shared import dump_prompt_input
 
 LLM_TAXONOMY_SUGGESTION_WORKFLOW = "llm_taxonomy_suggestion"
 LLM_TAXONOMY_SUGGESTION_PROMPT_VERSION = "v1"
@@ -92,40 +93,43 @@ DEFAULT_TAXONOMY_TREE: dict[str, dict[str, object]] = {
     },
 }
 
-LLM_TAXONOMY_SUGGESTION_SYSTEM_PROMPT = """
-You are assisting with taxonomy classification for PDF catalog records.
-
-You will receive only structured document facts and the allowed taxonomy tree.
-Do not use or infer any hidden full text.
-
-Goals:
-- choose the single best-fit taxonomy path from the provided tree
-- classify the document type
-- optionally suggest one missing subcategory if the existing tree feels too coarse
-- provide a confidence score
-- explain the decision briefly
-
-Evidence priority:
-- current relative path
-- file name
-- normalised name
-- metadata
-- ToC if present
-- `is_digital` as context only
-
-Rules:
-- choose exactly one taxonomy path from the provided `taxonomy_tree`
-- do not invent a primary path outside the provided tree
-- choose exactly one document type from the provided `allowed_document_types`
-- prefer filename and path clues first, then metadata, then ToC
-- ToC is helpful but not required
-- if the classification is weak or ambiguous, still choose the best-fit path and lower confidence
-- `suggested_new_subcategory` must be null unless the existing tree is clearly missing a useful
-  finer-grained grouping
-- keep output strictly as JSON matching the requested schema
-- `confidence` must be between 0 and 1
-- `reasoning_summary` should be concise and evidence-based
-""".strip()
+LLM_TAXONOMY_SUGGESTION_SYSTEM_PROMPT = build_system_prompt(
+    role="You are assisting with taxonomy classification for PDF catalog records.",
+    input_scope="structured document facts and the allowed taxonomy tree",
+    goals=[
+        "choose the single best-fit taxonomy path from the provided tree",
+        "classify the document type",
+        "optionally suggest one missing subcategory if the existing tree feels too coarse",
+        "provide a confidence score",
+        "explain the decision briefly",
+    ],
+    evidence_priority=[
+        "current relative path",
+        "file name",
+        "normalised name",
+        "metadata",
+        "ToC if present",
+        "`is_digital` as context only",
+    ],
+    rules=[
+        "choose exactly one taxonomy path from the provided `taxonomy_tree`",
+        "do not invent a primary path outside the provided tree",
+        "choose exactly one document type from the provided `allowed_document_types`",
+        "prefer filename and path clues first, then metadata, then ToC",
+        "ToC is helpful but not required",
+        (
+            "if the classification is weak or ambiguous, still choose the best-fit "
+            "path and lower confidence"
+        ),
+        (
+            "`suggested_new_subcategory` must be null unless the existing tree is "
+            "clearly missing a useful finer-grained grouping"
+        ),
+        "keep output strictly as JSON matching the requested schema",
+        "`confidence` must be between 0 and 1",
+        "`reasoning_summary` should be concise and evidence-based",
+    ],
+)
 
 
 class LlmTaxonomySuggestionPromptInput(BaseModel):
@@ -192,7 +196,7 @@ def build_taxonomy_suggestion_user_prompt(
     prompt_input: LlmTaxonomySuggestionPromptInput,
 ) -> str:
     """Serialize prompt input for the LLM user message."""
-    return json.dumps(prompt_input.model_dump(mode="json"), ensure_ascii=False, indent=2)
+    return dump_prompt_input(prompt_input)
 
 
 def flatten_taxonomy_tree(
