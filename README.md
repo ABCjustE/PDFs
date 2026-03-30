@@ -47,15 +47,16 @@ SQLite schema changes are now managed with Alembic.
 Typical baseline flow for a fresh or reset SQLite DB:
 
 ```bash
-cd pdfzx
+cd /path/to/PDFs
 uv run alembic upgrade head
+cd pdfzx
 uv run python ../client.py migrate-sqlite --replace
 ```
 
 Typical workflow after editing SQLAlchemy models:
 
 ```bash
-cd pdfzx
+cd /path/to/PDFs
 uv run alembic revision --autogenerate -m "describe schema change"
 uv run alembic upgrade head
 ```
@@ -91,6 +92,12 @@ Notes:
 - `probe-toc-review`
   - run the ToC-review prompt against one document in SQLite
   - judge ToC validity, topical relevance, and likely preface page
+- `suggest-llm`
+  - run document suggestion over a filtered batch and persist results
+- `suggest-taxonomy`
+  - run taxonomy suggestion over a filtered batch and persist results
+- `suggest-toc-review`
+  - run ToC review over a filtered batch and persist results
 
 Storage roles:
 
@@ -125,13 +132,21 @@ Notes:
 - `export-json` writes a JSON snapshot from SQLite to `PDFZX_JSON_DB` or `--json-db`
 - `PDFZX_ENABLE_NAME_NORMALIZATION=false` disables deterministic name normalization in both scan and backfill flows
 - `probe-llm` requires:
+- all LLM probe and batch commands require:
   - `PDFZX_ONLINE_FEATURES=true`
   - `PDFZX_OPENAI_API_KEY`
+- single-document probes also require:
   - a target document `--sha256`
 - `probe-llm --persist` stores the validated suggestion
 - `probe-llm --force` bypasses the same-doc same-prompt duplicate gate
 - `probe-taxonomy` uses `PDFZX_LLM_MAX_TOC_ENTRIES` to cap ToC evidence sent to the model
 - `probe-toc-review` uses the same ToC cap and keeps suggestions separate from canonical document fields
+- batch suggestion commands support:
+  - `--require-digital`
+  - `--require-toc`
+  - `--limit`
+  - `--force`
+  - `--output-ndjson`
 
 Example with explicit args:
 
@@ -168,6 +183,28 @@ Probe one document against the ToC-review prompt:
 ```bash
 pdfzx/.venv/bin/python client.py probe-toc-review --sha256 <sha256>
 ```
+
+Run taxonomy suggestion for only digital documents that already have ToC:
+
+```bash
+pdfzx/.venv/bin/python client.py suggest-taxonomy --require-digital --require-toc --limit 10
+```
+
+Write per-document prompt input/output records during a batch run:
+
+```bash
+pdfzx/.venv/bin/python client.py suggest-taxonomy --require-digital --require-toc --output-ndjson ./taxonomy.ndjson
+```
+
+`--output-ndjson` writes one JSON line per candidate document, including:
+
+- `workflow`
+- `sha256`
+- `status`
+- `reason`
+- `prompt_input`
+- `parsed_response`
+- `persisted`
 
 ## Test
 
