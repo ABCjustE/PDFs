@@ -1,3 +1,12 @@
+`pdfzx` is a Python library for PDF inventory and enrichment.
+
+It processes a local PDF collection in two phases:
+
+- Phase 1 offline: hash files, extract metadata and ToC, detect digital vs scanned PDFs, normalize document names, and persist the registry to SQLite
+- Phase 2 online: run prompt-based LLM workflows against the scanned registry to generate reviewable suggestions such as document attributes and taxonomy classification
+
+The package is library-first. The repo-level `client.py` is an operator helper for local workflows such as Yazi selection, migration, export, and single-document LLM probing.
+
 1. select files or folders in `yazi`
 2. write the selection to `yazi-choice.txt`
 3. run `client.py scan`
