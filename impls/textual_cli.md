@@ -58,24 +58,24 @@ Progress model:
 
 Code split:
 
-- [textual_cli.py](/Users/tkingkwun/Development/Github/PDFs/textual_cli.py)
+- [textual_cli.py](../textual_cli.py)
   - thin entrypoint
-- [textual_client/app.py](/Users/tkingkwun/Development/Github/PDFs/textual_client/app.py)
+- [textual_client/app.py](../textual_client/app.py)
   - Textual widgets, event handlers, UI state
-- [textual_client/screens.py](/Users/tkingkwun/Development/Github/PDFs/textual_client/screens.py)
+- [textual_client/screens.py](../textual_client/screens.py)
   - modal choice-file dialog
-- [textual_client/runtime.py](/Users/tkingkwun/Development/Github/PDFs/textual_client/runtime.py)
+- [textual_client/runtime.py](../textual_client/runtime.py)
   - subprocess command building
   - stderr log streaming
   - JSON log parsing
   - final summary parsing
-- [textual_client/config.py](/Users/tkingkwun/Development/Github/PDFs/textual_client/config.py)
+- [textual_client/config.py](../textual_client/config.py)
   - `.env` loading
   - default root/db/workers/log-level
   - Textual log paths
   - choice-file path
   - client script/cwd overrides
-- [client.py](/Users/tkingkwun/Development/Github/PDFs/client.py)
+- [client.py](../client.py)
   - actual run worker used by the Textual client
 
 Logs:

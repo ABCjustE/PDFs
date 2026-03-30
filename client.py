@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from pdfzx import InventoryJob
 from pdfzx import configure_logging
 from pdfzx.config import ScanConfig
+from pdfzx.llm_suggestion import probe_document_suggestion
 from pdfzx.storage import JsonStorage
 
 
@@ -146,6 +147,23 @@ def main() -> int:
         default=default_config.db_path,
         help="Target JSON export path.",
     )
+    probe_parser = subparsers.add_parser(
+        "probe-llm",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help="Probe one document against the LLM prompt and inspect input/output.",
+    )
+    probe_parser.add_argument("--sha256", required=True, help="Document sha256 to probe.")
+    probe_parser.add_argument(
+        "--persist",
+        action="store_true",
+        help="Persist the validated suggestion if the probe succeeds.",
+    )
+    probe_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Bypass the duplicate suggestion gate and send the request anyway.",
+    )
 
     args = parser.parse_args()
 
@@ -191,6 +209,31 @@ def main() -> int:
                     "jobs": len(registry.jobs),
                 },
                 indent=2,
+            )
+        )
+        return 0
+    if args.command == "probe-llm":
+        result = probe_document_suggestion(
+            sqlite_db_path=config.sqlite3_db_path,
+            sha256=args.sha256,
+            online_features=config.online_features,
+            openai_api_key=config.openai_api_key,
+            openai_model=config.openai_model,
+            persist=args.persist,
+            force=args.force,
+        )
+        print(
+            json.dumps(
+                {
+                    "should_request": result.should_request,
+                    "reason": result.reason,
+                    "prompt_id": result.prompt_id,
+                    "prompt_input": result.prompt_input,
+                    "parsed_response": result.parsed_response,
+                    "persisted": result.persisted,
+                },
+                indent=2,
+                ensure_ascii=False,
             )
         )
         return 0
