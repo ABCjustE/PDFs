@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy import func
 from sqlalchemy import select
@@ -94,10 +95,5 @@ def test_migrate_json_to_sqlite_requires_replace_for_existing_target(tmp_path: P
     source_json.write_text('{"documents": {}, "file_stats": {}, "jobs": []}', encoding="utf-8")
     target_sqlite.write_text("existing", encoding="utf-8")
 
-    try:
+    with pytest.raises(FileExistsError, match="already exists"):
         migrate_json_to_sqlite(source_json=source_json, target_sqlite=target_sqlite)
-    except FileExistsError as exc:
-        assert "already exists" in str(exc)
-    else:
-        msg = "Expected FileExistsError"
-        raise AssertionError(msg)

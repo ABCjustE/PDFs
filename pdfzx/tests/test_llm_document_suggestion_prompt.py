@@ -36,9 +36,7 @@ def test_build_document_suggestion_prompt_input_excludes_toc() -> None:
 def test_build_document_suggestion_user_prompt_is_json() -> None:
     record = DocumentRecord(sha256="abc", md5="def", file_name="sample.pdf", paths=["sample.pdf"])
 
-    prompt = build_document_suggestion_user_prompt(
-        build_document_suggestion_prompt_input(record)
-    )
+    prompt = build_document_suggestion_user_prompt(build_document_suggestion_prompt_input(record))
 
     payload = json.loads(prompt)
     assert payload["sha256"] == "abc"

@@ -12,9 +12,8 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from pdfzx.db.migration import import_registry_to_sqlite
 from pdfzx.db.models import Document
-from pdfzx.db.models import DocumentPath
-from pdfzx.db.models import DocumentTocEntry
 from pdfzx.db.models import FileStat
 from pdfzx.db.models import Job
 from pdfzx.db.session import create_sqlite_engine
@@ -120,7 +119,10 @@ class SqliteStorage:
                     documents[row.sha256] = DocumentRecord(
                         sha256=row.sha256,
                         md5=row.md5,
-                        paths=[path.rel_path for path in sorted(row.paths, key=lambda item: item.rel_path)],
+                        paths=[
+                            path.rel_path
+                            for path in sorted(row.paths, key=lambda item: item.rel_path)
+                        ],
                         file_name=row.file_name,
                         normalised_name=row.normalised_name,
                         metadata=PdfMetadata(
@@ -162,7 +164,7 @@ class SqliteStorage:
 
     def save(self, registry: Registry) -> None:
         """Persist Registry by rewriting the SQLite file from the canonical Registry state."""
-        from pdfzx.db.migration import import_registry_to_sqlite
-
         import_registry_to_sqlite(registry=registry, target_sqlite=self._path, replace=True)
-        logger.debug("saved sqlite db", extra={"path": str(self._path), "docs": len(registry.documents)})
+        logger.debug(
+            "saved sqlite db", extra={"path": str(self._path), "docs": len(registry.documents)}
+        )

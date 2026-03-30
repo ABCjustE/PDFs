@@ -17,7 +17,10 @@ class DocumentSuggestionRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def get_by_document_and_prompt(self, *, sha256: str, prompt_id: int) -> LlmDocumentSuggestion | None:
+    def get_by_document_and_prompt(
+        self, *, sha256: str, prompt_id: int
+    ) -> LlmDocumentSuggestion | None:
+        """Return the stored suggestion for a document/prompt pair, if present."""
         stmt = select(LlmDocumentSuggestion).where(
             LlmDocumentSuggestion.sha256 == sha256, LlmDocumentSuggestion.prompt_id == prompt_id
         )
@@ -31,6 +34,7 @@ class DocumentSuggestionRepository:
         response: LlmDocumentSuggestionResponse,
         status: str = "pending",
     ) -> LlmDocumentSuggestion:
+        """Upsert the structured suggestion payload for a document and prompt."""
         now = datetime.now(tz=UTC).replace(tzinfo=None)
         suggestion = self.get_by_document_and_prompt(sha256=sha256, prompt_id=prompt.id)
         payload = response.model_dump(mode="json")

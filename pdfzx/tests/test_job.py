@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
+from pdfzx import InventoryJob
+from pdfzx.config import ScanConfig
 from pdfzx.models import DocumentRecord
 from pdfzx.models import PdfMetadata
 from pdfzx.models import Registry
-from pdfzx import InventoryJob
-from pdfzx.config import ScanConfig
 
 
 def _place(src: Path, root: Path, relative_path: str) -> Path:
@@ -24,9 +24,7 @@ def _place(src: Path, root: Path, relative_path: str) -> Path:
 @pytest.fixture
 def config(pdf_root: Path, tmp_path: Path) -> ScanConfig:
     return ScanConfig(
-        root_path=pdf_root,
-        db_path=tmp_path / "db.json",
-        sqlite3_db_path=tmp_path / "db.sqlite3",
+        root_path=pdf_root, db_path=tmp_path / "db.json", sqlite3_db_path=tmp_path / "db.sqlite3"
     )
 
 
@@ -91,7 +89,11 @@ def test_run_skips_invalid_pdf_and_continues(make_pdf, pdf_root: Path, config: S
 
 
 def test_run_assigns_normalised_name(make_pdf, pdf_root: Path, config: ScanConfig) -> None:
-    path = _place(make_pdf("advanced_python_3rd.pdf", ["hello world " * 10]), pdf_root, "advanced_python_3rd.pdf")
+    path = _place(
+        make_pdf("advanced_python_3rd.pdf", ["hello world " * 10]),
+        pdf_root,
+        "advanced_python_3rd.pdf",
+    )
 
     job = InventoryJob(root=pdf_root, config=config)
     job.run([path])
@@ -125,9 +127,7 @@ def test_backfill_normalised_names_updates_existing_registry(
     assert job._storage.load().documents["abc"].normalised_name == "Advanced Python 3rd.pdf"  # noqa: SLF001
 
 
-def test_backfill_uses_file_name_not_metadata_title(
-    pdf_root: Path, tmp_path: Path
-) -> None:
+def test_backfill_uses_file_name_not_metadata_title(pdf_root: Path, tmp_path: Path) -> None:
     config = ScanConfig(
         root_path=pdf_root, db_path=tmp_path / "db.json", sqlite3_db_path=tmp_path / "db.sqlite3"
     )

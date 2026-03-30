@@ -18,6 +18,7 @@ class PromptRepository:
     def get_by_identity(
         self, *, workflow_name: str, model_provider: str, model: str, prompt_version: str
     ) -> Prompt | None:
+        """Return a prompt by its stable workflow/model/version identity."""
         stmt = select(Prompt).where(
             Prompt.workflow_name == workflow_name,
             Prompt.model_provider == model_provider,
@@ -27,6 +28,7 @@ class PromptRepository:
         return self._session.scalar(stmt)
 
     def get_active(self, *, workflow_name: str) -> Prompt | None:
+        """Return the latest active prompt for a workflow, if present."""
         stmt = (
             select(Prompt)
             .where(Prompt.workflow_name == workflow_name, Prompt.active.is_(True))
@@ -34,7 +36,7 @@ class PromptRepository:
         )
         return self._session.scalar(stmt)
 
-    def upsert(
+    def upsert(  # noqa: PLR0913
         self,
         *,
         workflow_name: str,
@@ -44,6 +46,7 @@ class PromptRepository:
         prompt_version: str,
         active: bool = True,
     ) -> Prompt:
+        """Create or refresh a prompt definition for one workflow/model/version."""
         now = datetime.now(tz=UTC).replace(tzinfo=None)
         prompt = self.get_by_identity(
             workflow_name=workflow_name,

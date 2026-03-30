@@ -3,12 +3,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import JSON
 from sqlalchemy import Boolean
 from sqlalchemy import DateTime
 from sqlalchemy import Float
 from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
-from sqlalchemy import JSON
 from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy import UniqueConstraint
@@ -20,6 +20,8 @@ from pdfzx.db.base import Base
 
 
 class Document(Base):
+    """Canonical document record keyed by content hash."""
+
     __tablename__ = "documents"
 
     sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -42,22 +44,24 @@ class Document(Base):
     first_seen_job: Mapped[str | None] = mapped_column(ForeignKey("jobs.job_id"))
     last_seen_job: Mapped[str | None] = mapped_column(ForeignKey("jobs.job_id"))
 
-    paths: Mapped[list["DocumentPath"]] = relationship(
+    paths: Mapped[list[DocumentPath]] = relationship(
         back_populates="document", cascade="all, delete-orphan"
     )
-    toc_entries: Mapped[list["DocumentTocEntry"]] = relationship(
+    toc_entries: Mapped[list[DocumentTocEntry]] = relationship(
         back_populates="document", cascade="all, delete-orphan"
     )
-    file_stats: Mapped[list["FileStat"]] = relationship(back_populates="document")
-    llm_document_suggestions: Mapped[list["LlmDocumentSuggestion"]] = relationship(
+    file_stats: Mapped[list[FileStat]] = relationship(back_populates="document")
+    llm_document_suggestions: Mapped[list[LlmDocumentSuggestion]] = relationship(
         back_populates="document"
     )
-    llm_taxonomy_suggestions: Mapped[list["LlmTaxonomySuggestion"]] = relationship(
+    llm_taxonomy_suggestions: Mapped[list[LlmTaxonomySuggestion]] = relationship(
         back_populates="document"
     )
 
 
 class DocumentPath(Base):
+    """Known relative path for a document."""
+
     __tablename__ = "document_paths"
     __table_args__ = (UniqueConstraint("sha256", "rel_path"),)
 
@@ -69,6 +73,8 @@ class DocumentPath(Base):
 
 
 class DocumentTocEntry(Base):
+    """Ordered table-of-contents entry for a document."""
+
     __tablename__ = "document_toc"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -82,6 +88,8 @@ class DocumentTocEntry(Base):
 
 
 class FileStat(Base):
+    """Per-path incremental scan state."""
+
     __tablename__ = "file_stats"
 
     rel_path: Mapped[str] = mapped_column(String(1024), primary_key=True)
@@ -91,10 +99,12 @@ class FileStat(Base):
     last_scanned_job: Mapped[str] = mapped_column(ForeignKey("jobs.job_id"), nullable=False)
 
     document: Mapped[Document] = relationship(back_populates="file_stats")
-    job: Mapped["Job"] = relationship(back_populates="file_stats")
+    job: Mapped[Job] = relationship(back_populates="file_stats")
 
 
 class Job(Base):
+    """Inventory run audit record."""
+
     __tablename__ = "jobs"
 
     job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -110,6 +120,8 @@ class Job(Base):
 
 
 class Prompt(Base):
+    """Stored prompt definition and version identity."""
+
     __tablename__ = "prompts"
     __table_args__ = (
         UniqueConstraint("workflow_name", "model_provider", "model", "prompt_version"),
@@ -125,15 +137,17 @@ class Prompt(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
 
-    document_suggestions: Mapped[list["LlmDocumentSuggestion"]] = relationship(
+    document_suggestions: Mapped[list[LlmDocumentSuggestion]] = relationship(
         back_populates="prompt"
     )
-    taxonomy_suggestions: Mapped[list["LlmTaxonomySuggestion"]] = relationship(
+    taxonomy_suggestions: Mapped[list[LlmTaxonomySuggestion]] = relationship(
         back_populates="prompt"
     )
 
 
 class LlmDocumentSuggestion(Base):
+    """Structured LLM suggestion for one document and prompt."""
+
     __tablename__ = "llm_document_suggestions"
     __table_args__ = (UniqueConstraint("sha256", "prompt_id"),)
 
@@ -156,6 +170,8 @@ class LlmDocumentSuggestion(Base):
 
 
 class LlmTaxonomySuggestion(Base):
+    """Structured taxonomy suggestion for one document and prompt."""
+
     __tablename__ = "llm_taxonomy_suggestions"
     __table_args__ = (UniqueConstraint("sha256", "prompt_id"),)
 

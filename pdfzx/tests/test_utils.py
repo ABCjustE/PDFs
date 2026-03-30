@@ -44,7 +44,7 @@ def test_is_digital_rejects_blank_pages(make_pdf: Callable[[str, list[str]], Pat
 
 
 def test_is_digital_only_checks_first_three_pages(
-    make_pdf: Callable[[str, list[str]], Path]
+    make_pdf: Callable[[str, list[str]], Path],
 ) -> None:
     path = make_pdf("late_text.pdf", ["", "", "", "Text appears too late."])
     with pymupdf.open(path) as doc:

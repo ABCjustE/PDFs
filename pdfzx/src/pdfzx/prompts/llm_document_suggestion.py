@@ -91,8 +91,6 @@ def build_document_suggestion_prompt_input(
     )
 
 
-def build_document_suggestion_user_prompt(
-    prompt_input: LlmDocumentSuggestionPromptInput,
-) -> str:
+def build_document_suggestion_user_prompt(prompt_input: LlmDocumentSuggestionPromptInput) -> str:
     """Serialize prompt input for the LLM user message."""
     return json.dumps(prompt_input.model_dump(mode="json"), ensure_ascii=False, indent=2)

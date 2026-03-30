@@ -18,6 +18,8 @@ from pdfzx.prompts.llm_document_suggestion import build_document_suggestion_user
 
 @dataclass(slots=True)
 class ProbeSuggestionResult:
+    """Result payload for a one-document prompt probe."""
+
     should_request: bool
     reason: str
     prompt_id: int | None
@@ -26,7 +28,7 @@ class ProbeSuggestionResult:
     persisted: bool
 
 
-def probe_document_suggestion(
+def probe_document_suggestion(  # noqa: PLR0913
     *,
     sqlite_db_path,
     sha256: str,
@@ -37,6 +39,7 @@ def probe_document_suggestion(
     force: bool = False,
     client: OpenAI | None = None,
 ) -> ProbeSuggestionResult:
+    """Probe the document-suggestion prompt against one stored document."""
     if not online_features:
         msg = "PDFZX_ONLINE_FEATURES is disabled"
         raise ValueError(msg)

@@ -65,13 +65,11 @@ def test_init_sqlite_db_upgrades_legacy_llm_document_suggestion_columns(tmp_path
     upgraded = sqlite3.connect(db_path)
     try:
         columns = {
-            row[1]
-            for row in upgraded.execute("PRAGMA table_info(llm_document_suggestions)")
+            row[1] for row in upgraded.execute("PRAGMA table_info(llm_document_suggestions)")
         }
         assert "suggested_file_name" in columns
         copied_value = upgraded.execute(
-            "SELECT suggested_file_name FROM llm_document_suggestions WHERE sha256 = ?",
-            ("abc",),
+            "SELECT suggested_file_name FROM llm_document_suggestions WHERE sha256 = ?", ("abc",)
         ).fetchone()
         assert copied_value == ("Sample Book.pdf",)
     finally:

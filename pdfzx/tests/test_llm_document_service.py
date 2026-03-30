@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from sqlalchemy.orm import Session
 
 from pdfzx.db.models import Document
@@ -80,11 +81,7 @@ def test_store_response_requires_existing_document(tmp_path) -> None:
                 suggested_labels=["sample"],
                 reasoning_summary="test",
             )
-            try:
+            with pytest.raises(ValueError, match="Document not found"):
                 service.store_response(sha256="missing", response=response)
-            except ValueError as exc:
-                assert "Document not found" in str(exc)
-            else:
-                raise AssertionError("Expected ValueError")
     finally:
         engine.dispose()

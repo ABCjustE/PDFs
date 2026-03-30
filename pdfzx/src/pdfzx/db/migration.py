@@ -13,16 +13,13 @@ from pdfzx.db.models import FileStat
 from pdfzx.db.models import Job
 from pdfzx.db.session import init_sqlite_db
 from pdfzx.models import Registry
-from pdfzx.storage import JsonStorage
 
 
 def migrate_json_to_sqlite(
-    *,
-    source_json: Path,
-    target_sqlite: Path,
-    replace: bool = False,
+    *, source_json: Path, target_sqlite: Path, replace: bool = False
 ) -> dict[str, object]:
-    registry = JsonStorage(source_json).load()
+    """Import a legacy JSON registry file into a SQLite database."""
+    registry = Registry.model_validate_json(source_json.read_text(encoding="utf-8"))
     summary = import_registry_to_sqlite(
         registry=registry, target_sqlite=target_sqlite, replace=replace
     )
@@ -33,7 +30,7 @@ def migrate_json_to_sqlite(
 def import_registry_to_sqlite(
     *, registry: Registry, target_sqlite: Path, replace: bool = False
 ) -> dict[str, object]:
-
+    """Rewrite a SQLite database from the canonical in-memory registry."""
     if target_sqlite.exists():
         if not replace:
             msg = f"SQLite DB already exists: {target_sqlite}"

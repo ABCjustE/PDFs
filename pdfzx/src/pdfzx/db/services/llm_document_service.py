@@ -16,6 +16,8 @@ from pdfzx.prompts.llm_document_suggestion import LlmDocumentSuggestionResponse
 
 @dataclass(slots=True)
 class SuggestionDecision:
+    """Idempotency decision for whether an LLM request should be sent."""
+
     should_request: bool
     reason: str
     prompt_id: int | None = None
@@ -32,6 +34,7 @@ class LlmDocumentSuggestionService:
         self._suggestions = DocumentSuggestionRepository(session)
 
     def ensure_prompt(self) -> Prompt:
+        """Ensure the active prompt record exists for the current model identity."""
         return self._prompts.upsert(
             workflow_name=LLM_DOCUMENT_SUGGESTION_WORKFLOW,
             prompt_text=LLM_DOCUMENT_SUGGESTION_SYSTEM_PROMPT,
@@ -42,6 +45,7 @@ class LlmDocumentSuggestionService:
         )
 
     def should_request_for_document(self, *, sha256: str) -> SuggestionDecision:
+        """Return whether the current document still needs a suggestion request."""
         prompt = self.ensure_prompt()
         existing = self._suggestions.get_by_document_and_prompt(sha256=sha256, prompt_id=prompt.id)
         if existing is not None:
@@ -56,9 +60,8 @@ class LlmDocumentSuggestionService:
             prompt_id=prompt.id,
         )
 
-    def store_response(
-        self, *, sha256: str, response: LlmDocumentSuggestionResponse
-    ):
+    def store_response(self, *, sha256: str, response: LlmDocumentSuggestionResponse):
+        """Persist a validated LLM suggestion for an existing document."""
         prompt = self.ensure_prompt()
         document = self._session.get(Document, sha256)
         if document is None:
