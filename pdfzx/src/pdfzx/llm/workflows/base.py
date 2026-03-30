@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -79,6 +82,14 @@ class BatchSuggestionResult:
     failures: list[dict[str, str]]
 
 
+@dataclass(slots=True)
+class _PendingBatchRequest(Generic[PromptInputT]):
+    """Prepared batch request ready for concurrent API execution."""
+
+    sha256: str
+    prompt_input_model: PromptInputT
+
+
 def probe_prompt_workflow(  # noqa: PLR0913
     *,
     workflow: PromptWorkflowDefinition[PromptInputT, ResponseT],
@@ -149,7 +160,7 @@ def probe_prompt_workflow(  # noqa: PLR0913
         engine.dispose()
 
 
-def batch_prompt_workflow(  # noqa: PLR0913
+def batch_prompt_workflow(  # noqa: C901,PLR0913,PLR0915
     *,
     workflow: PromptWorkflowDefinition[PromptInputT, ResponseT],
     workflow_name: str,
@@ -161,6 +172,7 @@ def batch_prompt_workflow(  # noqa: PLR0913
     require_toc: bool = False,
     limit: int | None = None,
     force: bool = False,
+    max_concurrency: int = 1,
     output_ndjson: Path | None = None,
     client: OpenAI | None = None,
 ) -> BatchSuggestionResult:
@@ -201,6 +213,7 @@ def batch_prompt_workflow(  # noqa: PLR0913
             )
 
             openai_client = client or OpenAI(api_key=openai_api_key)
+            pending_requests: list[_PendingBatchRequest[PromptInputT]] = []
             for document in documents:
                 record = _document_record_from_orm(document)
                 try:
@@ -239,46 +252,70 @@ def batch_prompt_workflow(  # noqa: PLR0913
                     )
                     continue
 
-                try:
-                    response = openai_client.responses.parse(
-                        model=openai_model,
-                        instructions=workflow.system_prompt,
-                        input=workflow.build_user_prompt(prompt_input_model),
-                        text_format=workflow.response_model,
+                pending_requests.append(
+                    _PendingBatchRequest(
+                        sha256=record.sha256, prompt_input_model=prompt_input_model
                     )
-                    parsed = _require_parsed_response(response.output_parsed)
-                    service.store_response(sha256=record.sha256, response=parsed)
-                    session.commit()
-                    result.requested += 1
-                    result.persisted += 1
-                    _append_ndjson(
-                        output_ndjson,
-                        {
-                            "workflow": workflow_name,
-                            "sha256": record.sha256,
-                            "status": "persisted",
-                            "reason": "batch request completed",
-                            "prompt_input": prompt_input_model.model_dump(mode="json"),
-                            "parsed_response": parsed.model_dump(mode="json"),
-                            "persisted": True,
-                        },
-                    )
-                except Exception as exc:
-                    session.rollback()
-                    result.failed += 1
-                    result.failures.append({"sha256": record.sha256, "error": str(exc)})
-                    _append_ndjson(
-                        output_ndjson,
-                        {
-                            "workflow": workflow_name,
-                            "sha256": record.sha256,
-                            "status": "failed",
-                            "reason": str(exc),
-                            "prompt_input": prompt_input_model.model_dump(mode="json"),
-                            "parsed_response": None,
-                            "persisted": False,
-                        },
-                    )
+                )
+
+            for sha256, prompt_input_model, parsed, error in _execute_batch_requests(
+                pending_requests=pending_requests,
+                workflow=workflow,
+                openai_client=openai_client,
+                openai_model=openai_model,
+                max_concurrency=max_concurrency,
+            ):
+                if error is None and parsed is not None:
+                    try:
+                        service.store_response(sha256=sha256, response=parsed)
+                        session.commit()
+                        result.requested += 1
+                        result.persisted += 1
+                        _append_ndjson(
+                            output_ndjson,
+                            {
+                                "workflow": workflow_name,
+                                "sha256": sha256,
+                                "status": "persisted",
+                                "reason": "batch request completed",
+                                "prompt_input": prompt_input_model.model_dump(mode="json"),
+                                "parsed_response": parsed.model_dump(mode="json"),
+                                "persisted": True,
+                            },
+                        )
+                    except Exception as exc:
+                        session.rollback()
+                        result.failed += 1
+                        result.failures.append({"sha256": sha256, "error": str(exc)})
+                        _append_ndjson(
+                            output_ndjson,
+                            {
+                                "workflow": workflow_name,
+                                "sha256": sha256,
+                                "status": "failed",
+                                "reason": str(exc),
+                                "prompt_input": prompt_input_model.model_dump(mode="json"),
+                                "parsed_response": None,
+                                "persisted": False,
+                            },
+                        )
+                    continue
+
+                session.rollback()
+                result.failed += 1
+                result.failures.append({"sha256": sha256, "error": error or "unknown error"})
+                _append_ndjson(
+                    output_ndjson,
+                    {
+                        "workflow": workflow_name,
+                        "sha256": sha256,
+                        "status": "failed",
+                        "reason": error or "unknown error",
+                        "prompt_input": prompt_input_model.model_dump(mode="json"),
+                        "parsed_response": None,
+                        "persisted": False,
+                    },
+                )
 
             return result
     finally:
@@ -318,6 +355,70 @@ def _require_parsed_response(parsed: ResponseT | None) -> ResponseT:
         msg = "LLM response did not contain a parsed structured payload"
         raise ValueError(msg)
     return parsed
+
+
+def _execute_batch_requests(
+    *,
+    pending_requests: list[_PendingBatchRequest[PromptInputT]],
+    workflow: PromptWorkflowDefinition[PromptInputT, ResponseT],
+    openai_client: OpenAI,
+    openai_model: str,
+    max_concurrency: int,
+) -> Iterator[tuple[str, PromptInputT, ResponseT | None, str | None]]:
+    """Execute prompt requests serially or concurrently and yield results."""
+    if max_concurrency <= 1:
+        for request in pending_requests:
+            yield _run_prompt_request(
+                workflow=workflow,
+                openai_client=openai_client,
+                openai_model=openai_model,
+                request=request,
+            )
+        return
+
+    with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
+        future_map = {
+            executor.submit(
+                _run_prompt_request,
+                workflow=workflow,
+                openai_client=openai_client,
+                openai_model=openai_model,
+                request=request,
+            ): request
+            for request in pending_requests
+        }
+        for future in as_completed(future_map):
+            request = future_map[future]
+            try:
+                yield future.result()
+            except Exception as exc:  # pragma: no cover - defensive fallback
+                yield (
+                    request.sha256,
+                    request.prompt_input_model,
+                    None,
+                    str(exc),
+                )
+
+
+def _run_prompt_request(
+    *,
+    workflow: PromptWorkflowDefinition[PromptInputT, ResponseT],
+    openai_client: OpenAI,
+    openai_model: str,
+    request: _PendingBatchRequest[PromptInputT],
+) -> tuple[str, PromptInputT, ResponseT | None, str | None]:
+    """Execute one LLM request and return the parsed result or error string."""
+    try:
+        response = openai_client.responses.parse(
+            model=openai_model,
+            instructions=workflow.system_prompt,
+            input=workflow.build_user_prompt(request.prompt_input_model),
+            text_format=workflow.response_model,
+        )
+        parsed = _require_parsed_response(response.output_parsed)
+    except Exception as exc:
+        return request.sha256, request.prompt_input_model, None, str(exc)
+    return request.sha256, request.prompt_input_model, parsed, None
 
 
 def _append_ndjson(path: Path | None, payload: dict[str, Any]) -> None:

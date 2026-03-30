@@ -131,7 +131,6 @@ Notes:
 - `backfill` updates `normalised_name` in SQLite without rescanning PDFs
 - `export-json` writes a JSON snapshot from SQLite to `PDFZX_JSON_DB` or `--json-db`
 - `PDFZX_ENABLE_NAME_NORMALIZATION=false` disables deterministic name normalization in both scan and backfill flows
-- `probe-llm` requires:
 - all LLM probe and batch commands require:
   - `PDFZX_ONLINE_FEATURES=true`
   - `PDFZX_OPENAI_API_KEY`
@@ -146,7 +145,10 @@ Notes:
   - `--require-toc`
   - `--limit`
   - `--force`
+  - `--max-concurrency`
   - `--output-ndjson`
+- batch NDJSON output is appended during the run as each request completes; it is not buffered until the whole batch finishes
+- keep `--max-concurrency` low at first; `2` or `4` is a practical starting point if you are near API rate limits
 
 Example with explicit args:
 
@@ -194,6 +196,18 @@ Write per-document prompt input/output records during a batch run:
 
 ```bash
 pdfzx/.venv/bin/python client.py suggest-taxonomy --require-digital --require-toc --output-ndjson ./taxonomy.ndjson
+```
+
+The NDJSON file grows during the batch run, so it can be tailed while requests are still in flight:
+
+```bash
+tail -f ./taxonomy.ndjson
+```
+
+Run a small concurrent batch:
+
+```bash
+pdfzx/.venv/bin/python client.py suggest-taxonomy --require-digital --require-toc --limit 10 --max-concurrency 4
 ```
 
 `--output-ndjson` writes one JSON line per candidate document, including:

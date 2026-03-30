@@ -153,6 +153,12 @@ def _add_batch_filter_args(parser: argparse.ArgumentParser) -> None:
         help="Bypass the same-doc same-prompt duplicate gate.",
     )
     parser.add_argument(
+        "--max-concurrency",
+        type=int,
+        default=1,
+        help="Maximum number of concurrent LLM requests for batch commands.",
+    )
+    parser.add_argument(
         "--output-ndjson",
         type=Path,
         default=None,
@@ -267,6 +273,7 @@ def _batch_kwargs(
         "require_toc": args.require_toc,
         "limit": args.limit,
         "force": args.force,
+        "max_concurrency": args.max_concurrency,
         "output_ndjson": args.output_ndjson,
     }
     if use_max_toc:

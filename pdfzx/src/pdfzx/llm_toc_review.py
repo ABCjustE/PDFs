@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from openai import OpenAI
 from sqlalchemy.orm import Session
 
@@ -66,7 +68,8 @@ def batch_toc_review_suggestion(  # noqa: PLR0913
     limit: int | None = None,
     force: bool = False,
     max_toc_entries: int = DEFAULT_LLM_MAX_TOC_ENTRIES,
-    output_ndjson=None,
+    max_concurrency: int = 1,
+    output_ndjson: Path | None = None,
     client: OpenAI | None = None,
 ) -> BatchSuggestionResult:
     """Run the ToC-review workflow over a filtered batch."""
@@ -81,6 +84,7 @@ def batch_toc_review_suggestion(  # noqa: PLR0913
         require_toc=require_toc,
         limit=limit,
         force=force,
+        max_concurrency=max_concurrency,
         output_ndjson=output_ndjson,
         client=client,
     )
