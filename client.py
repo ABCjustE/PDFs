@@ -24,6 +24,7 @@ from pdfzx.llm_taxonomy import batch_taxonomy_suggestion
 from pdfzx.llm_taxonomy import probe_taxonomy_suggestion
 from pdfzx.llm_toc_review import batch_toc_review_suggestion
 from pdfzx.llm_toc_review import probe_toc_review_suggestion
+from pdfzx.review import export_review_json
 from pdfzx.storage import JsonStorage
 
 
@@ -298,7 +299,7 @@ def _emit_batch_result(result: object) -> None:
     _emit_json(asdict(result))
 
 
-def main() -> int:  # noqa: PLR0911
+def main() -> int:  # noqa: PLR0911,PLR0915
     """Run the pdfzx user script entrypoint."""
     _load_env()
     default_config = _default_config()
@@ -363,6 +364,18 @@ def main() -> int:  # noqa: PLR0911
         default=default_config.db_path,
         help="Target JSON export path.",
     )
+    review_parser = subparsers.add_parser(
+        "export-review-json",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help="Export side-by-side review rows for current and suggested name/path data.",
+    )
+    review_parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("review.json"),
+        help="Target review JSON path.",
+    )
     for spec in workflow_specs:
         _add_probe_workflow_parser(subparsers, default_config, spec)
         _add_batch_workflow_parser(subparsers, default_config, spec)
@@ -407,6 +420,18 @@ def main() -> int:  # noqa: PLR0911
                 "documents": len(registry.documents),
                 "file_stats": len(registry.file_stats),
                 "jobs": len(registry.jobs),
+            }
+        )
+        return 0
+    if args.command == "export-review-json":
+        payload = export_review_json(
+            sqlite_db_path=config.sqlite3_db_path,
+            output_path=args.output,
+        )
+        _emit_json(
+            {
+                "output_path": str(args.output.resolve()),
+                "row_count": payload.row_count,
             }
         )
         return 0

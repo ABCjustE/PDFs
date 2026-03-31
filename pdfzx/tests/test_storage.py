@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
-import pytest
+from datetime import UTC
+from datetime import datetime
 
+import pytest
+from sqlalchemy.orm import Session
+
+from pdfzx.db.models import LlmDocumentSuggestion
+from pdfzx.db.models import Prompt
+from pdfzx.db.session import create_sqlite_engine
+from pdfzx.db.session import init_sqlite_db
 from pdfzx.models import DocumentRecord
 from pdfzx.models import Registry
 from pdfzx.storage import JsonStorage
@@ -113,3 +121,58 @@ def test_sqlite_save_creates_file(tmp_path):
     path = tmp_path / "db.sqlite3"
     SqliteStorage(path).save(Registry())
     assert path.exists()
+
+
+def test_sqlite_save_preserves_prompt_workflow_tables(tmp_path):
+    path = tmp_path / "db.sqlite3"
+    init_sqlite_db(path)
+    engine = create_sqlite_engine(path)
+    try:
+        with Session(engine) as session:
+            prompt = Prompt(
+                workflow_name="llm_document_suggestion",
+                prompt_text="prompt",
+                model_provider="openai",
+                model="gpt-4o-mini",
+                prompt_version="v1",
+                active=True,
+                created_at=_now(),
+                updated_at=_now(),
+            )
+            session.add(prompt)
+            session.flush()
+            session.add(
+                LlmDocumentSuggestion(
+                    sha256="abc123",
+                    prompt_id=prompt.id,
+                    suggested_file_name="Suggested.pdf",
+                    suggested_author=None,
+                    suggested_publisher=None,
+                    suggested_edition=None,
+                    suggested_labels_json=[],
+                    reasoning_summary="test",
+                    status="pending",
+                    applied=False,
+                    created_at=_now(),
+                    updated_at=_now(),
+                )
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+
+    SqliteStorage(path).save(_sample_registry())
+
+    engine = create_sqlite_engine(path)
+    try:
+        with Session(engine) as session:
+            assert session.query(Prompt).count() == 1
+            suggestions = session.query(LlmDocumentSuggestion).all()
+            assert len(suggestions) == 1
+            assert suggestions[0].suggested_file_name == "Suggested.pdf"
+    finally:
+        engine.dispose()
+
+
+def _now() -> datetime:
+    return datetime.now(tz=UTC).replace(tzinfo=None)
