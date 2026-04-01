@@ -7,6 +7,8 @@ It processes a local PDF collection in two phases:
 
 The package is library-first. The repo-level `client.py` is an operator helper for local workflows such as Yazi selection, migration, export, and single-document LLM probing.
 
+This project is intentionally more rigorous than a one-off filename categorization prompt. If the goal is only a quick manual hierarchy suggestion, a lightweight prompt over filenames is much simpler. `pdfzx` exists to keep the slower but more durable parts: persistent scan facts, prompt provenance, repeatable LLM suggestions, and a review/apply workflow over a large local collection.
+
 1. select files or folders in `yazi`
 2. write the selection to `yazi-choice.txt`
 3. run `client.py scan`
