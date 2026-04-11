@@ -94,8 +94,11 @@ Notes:
   - judge ToC validity, topical relevance, and likely preface page
 - `probe-taxonomy-partition`
   - run the experimental taxonomy-partition prompt against one or more shuffled batches
-  - inspect batch-level `prompt_input` and `parsed_response`
-  - optionally carry `taxonomy_bag_after` forward into the next batch
+- `probe-taxonomy-partition-generalize`
+  - run the full probe flow through final generalization
+- `run-taxonomy-partition`
+  - run taxonomy partitioning on one node path such as `Root` or `Root/Physics`
+  - bootstraps `Root` on first use, then persists child nodes on later runs
 - `suggest-llm`
   - run document suggestion over a filtered batch and persist results
 - `suggest-toc-review`
@@ -143,6 +146,7 @@ Notes:
 - `probe-toc-review` uses the same ToC cap and keeps suggestions separate from canonical document fields
 - `PDFZX_PARTITION_SEED` is the stable seed that future taxonomy-partition batching uses to derive a deterministic document order
 - `PDFZX_PARTITION_CHUNK_SIZE` is the default batch size for taxonomy-partition probing
+- taxonomy partitioning command details are documented in [`docs/partitioning.md`](docs/partitioning.md)
 - batch suggestion commands support:
   - `--require-digital`
   - `--require-toc`
@@ -207,13 +211,17 @@ Probe three consecutive shuffled batches and carry the bag forward:
 pdfzx/.venv/bin/python client.py probe-taxonomy-partition --chunk-size 20 --batch-index 0 --batch-count 3 --carry-bag
 ```
 
-Notes for `probe-taxonomy-partition`:
+Probe final taxonomy generalization over shuffled batches:
 
-- it reads all document hashes from SQLite, applies `PDFZX_PARTITION_SEED`, then chunks by `PDFZX_PARTITION_CHUNK_SIZE` or `--chunk-size`
-- `--batch-index` chooses the starting shuffled batch
-- `--batch-count` probes consecutive batches
-- `--carry-bag` feeds each batch's `taxonomy_bag_after` into the next batch as `taxonomy_bag_before`
-- the model does not receive per-document `sha256`, but the client output still includes `batch_sha256s` for local verification
+```bash
+pdfzx/.venv/bin/python client.py probe-taxonomy-partition-generalize --chunk-size 500 --batch-index 0 --batch-count 7
+```
+
+Run taxonomy partitioning on the root node:
+
+```bash
+pdfzx/.venv/bin/python client.py run-taxonomy-partition --node-path Root --chunk-size 500 --batch-index 0 --batch-count 7
+```
 
 `--output-ndjson` writes one JSON line per candidate document, including:
 

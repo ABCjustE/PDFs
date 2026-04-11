@@ -25,6 +25,9 @@ def test_taxonomy_partition_generalize_prompt_user_payload_is_json() -> None:
 
 
 def test_taxonomy_partition_generalize_prompt_constants_are_defined() -> None:
-    assert TAXONOMY_PARTITION_GENERALIZE_PROMPT_VERSION == "v1"
+    assert TAXONOMY_PARTITION_GENERALIZE_PROMPT_VERSION == "v2"
     assert "final parent-layer bag" in TAXONOMY_PARTITION_GENERALIZE_SYSTEM_PROMPT
     assert "include Others" in TAXONOMY_PARTITION_GENERALIZE_SYSTEM_PROMPT
+    assert "do not return both a broad parent and its narrow descendant" in (
+        TAXONOMY_PARTITION_GENERALIZE_SYSTEM_PROMPT
+    )

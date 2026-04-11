@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
+from sqlalchemy.orm import Session
 
 try:
     from pdfzx.review import export_review_json
@@ -26,6 +27,8 @@ from pdfzx.config import DEFAULT_PARTITION_SEED
 from pdfzx.config import ScanConfig
 from pdfzx.db.migration import migrate_json_to_sqlite
 from pdfzx.db.queries import list_document_sha256s
+from pdfzx.db.repositories import TaxonomyTreeRepository
+from pdfzx.db.session import create_sqlite_engine
 from pdfzx.llm_suggestion import batch_document_suggestion
 from pdfzx.llm_suggestion import probe_document_suggestion
 from pdfzx.llm_toc_review import batch_toc_review_suggestion
@@ -194,6 +197,57 @@ def _add_batch_filter_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_partition_args(
+    parser: argparse.ArgumentParser,
+    *,
+    default_chunk_size: int,
+    node_path_help: str | None,
+    default_batch_count: int | None,
+    batch_count_help: str,
+) -> None:
+    if node_path_help is not None:
+        parser.add_argument(
+            "--node-path",
+            default="Root",
+            help=node_path_help,
+        )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=default_chunk_size,
+        help="Override the partition chunk size for this run.",
+    )
+    parser.add_argument(
+        "--batch-index",
+        type=int,
+        default=0,
+        help="Zero-based shuffled batch index to start from.",
+    )
+    parser.add_argument(
+        "--batch-count",
+        type=int,
+        default=default_batch_count,
+        help=batch_count_help,
+    )
+    parser.add_argument(
+        "--bag",
+        nargs="*",
+        default=[],
+        help="Optional taxonomy bag items to pass into the accumulation stage.",
+    )
+    parser.add_argument(
+        "--bag-size-limit",
+        type=int,
+        default=10,
+        help="Maximum number of taxonomy bag items to request from the model.",
+    )
+    parser.add_argument(
+        "--carry-bag",
+        action="store_true",
+        help="Feed each accumulation batch's taxonomy_bag_after into the next batch.",
+    )
+
+
 def _workflow_specs() -> tuple[WorkflowCommandSpec, ...]:
     return (
         WorkflowCommandSpec(
@@ -322,6 +376,13 @@ def _partition_batches(config: ScanConfig, *, chunk_size: int) -> list[list[str]
     return chunk_items(ordered_sha256s, chunk_size=chunk_size)
 
 
+def _partition_batches_from_sha256s(
+    sha256s: list[str], *, seed: str, chunk_size: int
+) -> list[list[str]]:
+    ordered_sha256s = seeded_shuffle(sha256s, seed=seed)
+    return chunk_items(ordered_sha256s, chunk_size=chunk_size)
+
+
 def _probe_partition_runs(  # noqa: PLR0913
     config: ScanConfig,
     *,
@@ -333,6 +394,27 @@ def _probe_partition_runs(  # noqa: PLR0913
     carry_bag: bool,
 ) -> list[dict[str, object]]:
     batches = _partition_batches(config, chunk_size=chunk_size)
+    return _probe_partition_runs_from_batches(
+        config,
+        batches=batches,
+        batch_index=batch_index,
+        batch_count=batch_count,
+        bag=bag,
+        bag_size_limit=bag_size_limit,
+        carry_bag=carry_bag,
+    )
+
+
+def _probe_partition_runs_from_batches(  # noqa: PLR0913
+    config: ScanConfig,
+    *,
+    batches: list[list[str]],
+    batch_index: int,
+    batch_count: int,
+    bag: list[str],
+    bag_size_limit: int,
+    carry_bag: bool,
+) -> list[dict[str, object]]:
     if batch_count <= 0:
         msg = "batch_count must be greater than 0"
         raise ValueError(msg)
@@ -380,6 +462,173 @@ def _candidate_counts_from_runs(runs: list[dict[str, object]]) -> dict[str, int]
         for item in run.get("parsed_response", {}).get("taxonomy_bag_after", []):
             counts[item] = counts.get(item, 0) + 1
     return counts
+
+
+def _bootstrap_taxonomy_root(sqlite_db_path: Path) -> dict[str, object]:
+    engine = create_sqlite_engine(sqlite_db_path)
+    try:
+        with Session(engine) as session:
+            repo = TaxonomyTreeRepository(session)
+            existing_root = repo.get_node_by_path(path="Root")
+            root = repo.ensure_root_node()
+            synced_count = repo.sync_root_documents(root_node_id=root.id)
+            document_count = len(repo.list_document_sha256s(node_id=root.id))
+            session.commit()
+    finally:
+        engine.dispose()
+    return {
+        "bootstrapped": existing_root is None,
+        "node_id": root.id,
+        "node_path": root.path,
+        "document_count": document_count,
+        "synced_count": synced_count,
+        "message": (
+            "Root node initialized. Rerun the partition workflow to start LLM partitioning."
+            if existing_root is None
+            else "Root node already exists. Membership has been synchronized."
+        ),
+    }
+
+
+def _partition_generalize_payload(  # noqa: PLR0913
+    config: ScanConfig,
+    *,
+    sha256s: list[str],
+    node_path: str | None,
+    chunk_size: int,
+    batch_index: int,
+    batch_count: int | None,
+    bag: list[str],
+    bag_size_limit: int,
+    carry_bag: bool,
+) -> dict[str, object]:
+    batches = _partition_batches_from_sha256s(
+        sha256s,
+        seed=config.partition_seed,
+        chunk_size=chunk_size,
+    )
+    if not batches:
+        return {
+            "node_path": node_path,
+            "seed": config.partition_seed,
+            "chunk_size": chunk_size,
+            "batch_index": batch_index,
+            "batch_count": batch_count,
+            "carry_bag": carry_bag,
+            "node_document_count": len(sha256s),
+            "runs": [],
+            "candidate_counts": {},
+        }
+    effective_batch_count = batch_count
+    if effective_batch_count is None:
+        effective_batch_count = len(batches) - batch_index
+    runs = _probe_partition_runs_from_batches(
+        config,
+        batches=batches,
+        batch_index=batch_index,
+        batch_count=effective_batch_count,
+        bag=bag,
+        bag_size_limit=bag_size_limit,
+        carry_bag=carry_bag,
+    )
+    candidate_counts = _candidate_counts_from_runs(runs)
+    result = generalize_taxonomy_bag(
+        taxonomy_bag_before=list(candidate_counts),
+        candidate_counts=candidate_counts,
+        bag_size_limit=bag_size_limit,
+        online_features=config.online_features,
+        openai_api_key=config.openai_api_key,
+        openai_model=config.openai_model,
+    )
+    return {
+        "node_path": node_path,
+        "seed": config.partition_seed,
+        "chunk_size": chunk_size,
+        "batch_index": batch_index,
+        "batch_count": effective_batch_count,
+        "carry_bag": carry_bag,
+        "node_document_count": len(sha256s),
+        "runs": runs,
+        "candidate_counts": candidate_counts,
+        "generalize_prompt_input": result.prompt_input,
+        "generalize_parsed_response": result.parsed_response,
+    }
+
+
+def _ensure_taxonomy_node(
+    sqlite_db_path: Path, *, node_path: str
+) -> tuple[dict[str, object] | None, list[str] | None]:
+    engine = create_sqlite_engine(sqlite_db_path)
+    try:
+        with Session(engine) as session:
+            repo = TaxonomyTreeRepository(session)
+            if node_path == "Root":
+                existing_root = repo.get_node_by_path(path="Root")
+                root = repo.ensure_root_node()
+                synced_count = repo.sync_root_documents(root_node_id=root.id)
+                document_sha256s = repo.list_document_sha256s(node_id=root.id)
+                session.commit()
+                if existing_root is None:
+                    return (
+                        {
+                            "bootstrapped": True,
+                            "node_id": root.id,
+                            "node_path": root.path,
+                            "document_count": len(document_sha256s),
+                            "synced_count": synced_count,
+                            "message": (
+                                "Root node initialized. Rerun the command to start "
+                                "LLM partitioning."
+                            ),
+                        },
+                        None,
+                    )
+                return None, document_sha256s
+            node = repo.get_node_by_path(path=node_path)
+            if node is None:
+                msg = f"Taxonomy node not found: {node_path}"
+                raise ValueError(msg)
+            return None, repo.list_document_sha256s(node_id=node.id)
+    finally:
+        engine.dispose()
+
+
+def _persist_partition_children(
+    sqlite_db_path: Path,
+    *,
+    node_path: str,
+    child_names: list[str],
+) -> dict[str, object]:
+    engine = create_sqlite_engine(sqlite_db_path)
+    try:
+        with Session(engine) as session:
+            repo = TaxonomyTreeRepository(session)
+            parent = repo.get_node_by_path(path=node_path)
+            if parent is None:
+                msg = f"Taxonomy node not found: {node_path}"
+                raise ValueError(msg)
+            parent_node_id = parent.id
+            parent_node_path = parent.path
+            deleted_subtree_count = repo.replace_child_subtree(parent_id=parent_node_id)
+            children = [
+                repo.ensure_child_node(
+                    parent_id=parent_node_id,
+                    parent_path=parent_node_path,
+                    name=name,
+                )
+                for name in child_names
+            ]
+            child_payload = [{"id": child.id, "path": child.path} for child in children]
+            session.commit()
+    finally:
+        engine.dispose()
+    return {
+        "parent_node_id": parent_node_id,
+        "parent_node_path": parent_node_path,
+        "deleted_subtree_count": deleted_subtree_count,
+        "child_count": len(child_payload),
+        "children": child_payload,
+    }
 
 
 def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
@@ -465,40 +714,15 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
         add_help=False,
         help="Probe the taxonomy-partition prompt against one shuffled batch.",
     )
-    partition_probe_parser.add_argument(
-        "--batch-index",
-        type=int,
-        default=0,
-        help="Zero-based shuffled batch index to probe.",
-    )
-    partition_probe_parser.add_argument(
-        "--chunk-size",
-        type=int,
-        default=default_config.partition_chunk_size,
-        help="Override the partition chunk size for this probe command.",
-    )
-    partition_probe_parser.add_argument(
-        "--batch-count",
-        type=int,
-        default=1,
-        help="Number of consecutive shuffled batches to probe.",
-    )
-    partition_probe_parser.add_argument(
-        "--bag",
-        nargs="*",
-        default=[],
-        help="Optional taxonomy bag items to pass as the current working bag.",
-    )
-    partition_probe_parser.add_argument(
-        "--bag-size-limit",
-        type=int,
-        default=10,
-        help="Maximum number of taxonomy bag items to request from the model.",
-    )
-    partition_probe_parser.add_argument(
-        "--carry-bag",
-        action="store_true",
-        help="Feed each batch's taxonomy_bag_after into the next batch as taxonomy_bag_before.",
+    _add_partition_args(
+        partition_probe_parser,
+        default_chunk_size=default_config.partition_chunk_size,
+        node_path_help=None,
+        default_batch_count=1,
+        batch_count_help=(
+            "Number of consecutive shuffled batches to accumulate before "
+            "generalizing."
+        ),
     )
     partition_generalize_parser = subparsers.add_parser(
         "probe-taxonomy-partition-generalize",
@@ -506,40 +730,43 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
         add_help=False,
         help="Probe final taxonomy generalization over one or more shuffled partition batches.",
     )
-    partition_generalize_parser.add_argument(
-        "--batch-index",
-        type=int,
-        default=0,
-        help="Zero-based shuffled batch index to start from.",
+    _add_partition_args(
+        partition_generalize_parser,
+        default_chunk_size=default_config.partition_chunk_size,
+        node_path_help=None,
+        default_batch_count=1,
+        batch_count_help=(
+            "Number of consecutive shuffled batches to accumulate before "
+            "generalizing."
+        ),
     )
-    partition_generalize_parser.add_argument(
-        "--chunk-size",
-        type=int,
-        default=default_config.partition_chunk_size,
-        help="Override the partition chunk size for this probe command.",
+    run_partition_parser = subparsers.add_parser(
+        "run-taxonomy-partition",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help=(
+            "Bootstrap Root if needed, otherwise run taxonomy partitioning over one "
+            "node's document memberships."
+        ),
     )
-    partition_generalize_parser.add_argument(
-        "--batch-count",
-        type=int,
-        default=1,
-        help="Number of consecutive shuffled batches to accumulate before generalizing.",
+    _add_partition_args(
+        run_partition_parser,
+        default_chunk_size=default_config.partition_chunk_size,
+        node_path_help="Taxonomy node path to operate on.",
+        default_batch_count=None,
+        batch_count_help=(
+            "Number of consecutive shuffled batches to accumulate before "
+            "generalizing. Defaults to all remaining batches in the node."
+        ),
     )
-    partition_generalize_parser.add_argument(
-        "--bag",
-        nargs="*",
-        default=[],
-        help="Optional taxonomy bag items to pass into the accumulation stage.",
-    )
-    partition_generalize_parser.add_argument(
-        "--bag-size-limit",
-        type=int,
-        default=10,
-        help="Maximum number of taxonomy bag items to request from the model.",
-    )
-    partition_generalize_parser.add_argument(
-        "--carry-bag",
-        action="store_true",
-        help="Feed each accumulation batch's taxonomy_bag_after into the next batch.",
+    subparsers.add_parser(
+        "bootstrap-taxonomy-root",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help=(
+            "Create the Root taxonomy node if missing and sync all current "
+            "document hashes into it."
+        ),
     )
     for spec in workflow_specs:
         _add_probe_workflow_parser(subparsers, default_config, spec)
@@ -602,6 +829,38 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
             }
         )
         return 0
+    if args.command == "bootstrap-taxonomy-root":
+        _emit_json(_bootstrap_taxonomy_root(config.sqlite3_db_path))
+        return 0
+    if args.command == "run-taxonomy-partition":
+        bootstrap_result, node_sha256s = _ensure_taxonomy_node(
+            config.sqlite3_db_path,
+            node_path=args.node_path,
+        )
+        if bootstrap_result is not None:
+            _emit_json(bootstrap_result)
+            return 0
+        assert node_sha256s is not None
+        payload = _partition_generalize_payload(
+            config,
+            sha256s=node_sha256s,
+            node_path=args.node_path,
+            chunk_size=args.chunk_size,
+            batch_index=args.batch_index,
+            batch_count=args.batch_count,
+            bag=args.bag,
+            bag_size_limit=args.bag_size_limit,
+            carry_bag=args.carry_bag,
+        )
+        child_names = payload.get("generalize_parsed_response", {}).get("taxonomy_bag_after", [])
+        if child_names:
+            payload["persisted_children"] = _persist_partition_children(
+                config.sqlite3_db_path,
+                node_path=args.node_path,
+                child_names=child_names,
+            )
+        _emit_json(payload)
+        return 0
     if args.command == "probe-taxonomy-partition":
         batches = _partition_batches(config, chunk_size=args.chunk_size)
         if not batches:
@@ -628,48 +887,18 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
         )
         return 0
     if args.command == "probe-taxonomy-partition-generalize":
-        batches = _partition_batches(config, chunk_size=args.chunk_size)
-        if not batches:
-            _emit_json(
-                {
-                    "batch_index": args.batch_index,
-                    "batch_count": args.batch_count,
-                    "chunk_size": args.chunk_size,
-                    "runs": [],
-                    "candidate_counts": {},
-                }
-            )
-            return 0
-        runs = _probe_partition_runs(
-            config,
-            batch_index=args.batch_index,
-            batch_count=args.batch_count,
-            chunk_size=args.chunk_size,
-            bag=args.bag,
-            bag_size_limit=args.bag_size_limit,
-            carry_bag=args.carry_bag,
-        )
-        candidate_counts = _candidate_counts_from_runs(runs)
-        result = generalize_taxonomy_bag(
-            taxonomy_bag_before=list(candidate_counts),
-            candidate_counts=candidate_counts,
-            bag_size_limit=args.bag_size_limit,
-            online_features=config.online_features,
-            openai_api_key=config.openai_api_key,
-            openai_model=config.openai_model,
-        )
         _emit_json(
-            {
-                "seed": config.partition_seed,
-                "chunk_size": args.chunk_size,
-                "batch_index": args.batch_index,
-                "batch_count": args.batch_count,
-                "carry_bag": args.carry_bag,
-                "runs": runs,
-                "candidate_counts": candidate_counts,
-                "generalize_prompt_input": result.prompt_input,
-                "generalize_parsed_response": result.parsed_response,
-            }
+            _partition_generalize_payload(
+                config,
+                sha256s=list_document_sha256s(config.sqlite3_db_path),
+                node_path=None,
+                chunk_size=args.chunk_size,
+                batch_index=args.batch_index,
+                batch_count=args.batch_count,
+                bag=args.bag,
+                bag_size_limit=args.bag_size_limit,
+                carry_bag=args.carry_bag,
+            )
         )
         return 0
     if args.command in probe_specs:

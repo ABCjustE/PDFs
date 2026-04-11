@@ -22,5 +22,14 @@ def test_init_sqlite_db_creates_current_llm_document_suggestion_columns(
         assert "reasoning_summary" in columns
         assert "status" in columns
         assert "applied" in columns
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert "taxonomy_nodes" in tables
+        assert "taxonomy_node_documents" in tables
+        assert "taxonomy_assignments" in tables
     finally:
         connection.close()
