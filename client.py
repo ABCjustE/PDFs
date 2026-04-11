@@ -28,8 +28,6 @@ from pdfzx.db.migration import migrate_json_to_sqlite
 from pdfzx.db.queries import list_document_sha256s
 from pdfzx.llm_suggestion import batch_document_suggestion
 from pdfzx.llm_suggestion import probe_document_suggestion
-from pdfzx.llm_taxonomy import batch_taxonomy_suggestion
-from pdfzx.llm_taxonomy import probe_taxonomy_suggestion
 from pdfzx.llm_toc_review import batch_toc_review_suggestion
 from pdfzx.llm_toc_review import probe_toc_review_suggestion
 from pdfzx.partitioning.generalize import generalize_taxonomy_bag
@@ -206,16 +204,6 @@ def _workflow_specs() -> tuple[WorkflowCommandSpec, ...]:
             batch_help="Run document-suggestion over a filtered batch and persist results.",
             probe_fn=probe_document_suggestion,
             batch_fn=batch_document_suggestion,
-        ),
-        WorkflowCommandSpec(
-            name="taxonomy",
-            probe_command="probe-taxonomy",
-            batch_command="suggest-taxonomy",
-            probe_help="Probe one document against the taxonomy prompt and inspect input/output.",
-            batch_help="Run taxonomy suggestion over a filtered batch and persist results.",
-            probe_fn=probe_taxonomy_suggestion,
-            batch_fn=batch_taxonomy_suggestion,
-            uses_max_toc_entries=True,
         ),
         WorkflowCommandSpec(
             name="toc-review",

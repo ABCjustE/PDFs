@@ -89,9 +89,6 @@ Notes:
   - run the document-suggestion prompt against one document in SQLite
   - inspect `prompt_input` and validated `parsed_response`
   - respects the duplicate gate by default
-- `probe-taxonomy`
-  - run the taxonomy prompt against one document in SQLite
-  - classify subject path and document type
 - `probe-toc-review`
   - run the ToC-review prompt against one document in SQLite
   - judge ToC validity, topical relevance, and likely preface page
@@ -101,8 +98,6 @@ Notes:
   - optionally carry `taxonomy_bag_after` forward into the next batch
 - `suggest-llm`
   - run document suggestion over a filtered batch and persist results
-- `suggest-taxonomy`
-  - run taxonomy suggestion over a filtered batch and persist results
 - `suggest-toc-review`
   - run ToC review over a filtered batch and persist results
 
@@ -145,7 +140,6 @@ Notes:
   - a target document `--sha256`
 - `probe-llm --persist` stores the validated suggestion
 - `probe-llm --force` bypasses the same-doc same-prompt duplicate gate
-- `probe-taxonomy` uses `PDFZX_LLM_MAX_TOC_ENTRIES` to cap ToC evidence sent to the model
 - `probe-toc-review` uses the same ToC cap and keeps suggestions separate from canonical document fields
 - `PDFZX_PARTITION_SEED` is the stable seed that future taxonomy-partition batching uses to derive a deterministic document order
 - `PDFZX_PARTITION_CHUNK_SIZE` is the default batch size for taxonomy-partition probing
@@ -220,30 +214,6 @@ Notes for `probe-taxonomy-partition`:
 - `--batch-count` probes consecutive batches
 - `--carry-bag` feeds each batch's `taxonomy_bag_after` into the next batch as `taxonomy_bag_before`
 - the model does not receive per-document `sha256`, but the client output still includes `batch_sha256s` for local verification
-
-Run taxonomy suggestion for only digital documents that already have ToC:
-
-```bash
-pdfzx/.venv/bin/python client.py suggest-taxonomy --require-digital --require-toc --limit 10
-```
-
-Write per-document prompt input/output records during a batch run:
-
-```bash
-pdfzx/.venv/bin/python client.py suggest-taxonomy --require-digital --require-toc --output-ndjson ./taxonomy.ndjson
-```
-
-The NDJSON file grows during the batch run, so it can be tailed while requests are still in flight:
-
-```bash
-tail -f ./taxonomy.ndjson
-```
-
-Run a small concurrent batch:
-
-```bash
-pdfzx/.venv/bin/python client.py suggest-taxonomy --require-digital --require-toc --limit 10 --max-concurrency 4
-```
 
 `--output-ndjson` writes one JSON line per candidate document, including:
 

@@ -183,6 +183,8 @@ class LlmDocumentSuggestion(PromptSuggestionMixin, Base):
 class LlmTaxonomySuggestion(PromptSuggestionMixin, Base):
     """Structured taxonomy suggestion for one document and prompt."""
 
+    # TODO: Drop this table in a future schema migration after existing production
+    # data is no longer needed. The runtime taxonomy-suggestion workflow has been removed.
     __tablename__ = "llm_taxonomy_suggestions"
     __table_args__ = (UniqueConstraint("sha256", "prompt_id"),)
 

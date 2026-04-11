@@ -36,12 +36,14 @@ def import_registry_to_sqlite(
     *, registry: Registry, target_sqlite: Path, replace: bool = False
 ) -> dict[str, object]:
     """Rewrite a SQLite database from the canonical in-memory registry."""
-    phase2_state = _capture_phase2_state(target_sqlite)
     if target_sqlite.exists():
         if not replace:
             msg = f"SQLite DB already exists: {target_sqlite}"
             raise FileExistsError(msg)
+        phase2_state = _capture_phase2_state(target_sqlite)
         target_sqlite.unlink()
+    else:
+        phase2_state = {"prompts": [], "document": [], "taxonomy": [], "toc_review": []}
 
     init_sqlite_db(target_sqlite)
     engine = create_engine(f"sqlite:///{target_sqlite.resolve()}", future=True)

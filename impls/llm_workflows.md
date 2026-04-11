@@ -2,11 +2,10 @@
 
 ## Overview
 
-The backend now has three parallel LLM workflows:
+The backend now has two active parallel LLM workflows:
 
 1. document suggestion
-2. taxonomy suggestion
-3. ToC review suggestion
+2. ToC review suggestion
 
 All three share the same architecture:
 
@@ -75,27 +74,7 @@ Probe command:
 
 - `probe-llm`
 
-## Workflow 2 — Taxonomy Suggestion
-
-Implemented in:
-
-- [llm_taxonomy_suggestion.py](../pdfzx/src/pdfzx/prompts/llm_taxonomy_suggestion.py)
-- [taxonomy_suggestions.py](../pdfzx/src/pdfzx/db/repositories/taxonomy_suggestions.py)
-- [llm_taxonomy_service.py](../pdfzx/src/pdfzx/db/services/llm_taxonomy_service.py)
-- [taxonomy_suggestion.py](../pdfzx/src/pdfzx/llm/workflows/taxonomy_suggestion.py)
-- [llm_taxonomy.py](../pdfzx/src/pdfzx/llm_taxonomy.py)
-
-Purpose:
-
-- classify one taxonomy path from the allowed tree
-- classify document type
-- optionally suggest one missing subcategory
-
-Probe command:
-
-- `probe-taxonomy`
-
-## Workflow 3 — ToC Review Suggestion
+## Workflow 2 — ToC Review Suggestion
 
 Implemented in:
 
@@ -146,7 +125,6 @@ before any online request is sent.
 Current probe commands:
 
 - `probe-llm`
-- `probe-taxonomy`
 - `probe-toc-review`
 
 Current behavior:
