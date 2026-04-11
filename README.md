@@ -9,7 +9,7 @@ The package is library-first. The repo-level `client.py` is an operator helper f
 
 This project is intentionally more rigorous than a one-off filename categorization prompt. If the goal is only a quick manual hierarchy suggestion, a lightweight prompt over filenames is much simpler. `pdfzx` exists to keep the slower but more durable parts: persistent scan facts, prompt provenance, repeatable LLM suggestions, and a review/apply workflow over a large local collection.
 
-1. select files or folders in `yazi`
+1. select files or folders in `yazi` ( which outputs a list of absolute paths)
 2. write the selection to `yazi-choice.txt`
 3. run `client.py scan`
 
@@ -41,6 +41,7 @@ Important env knobs:
 - `PDFZX_OPENAI_API_KEY`
 - `PDFZX_OPENAI_MODEL`
 - `PDFZX_LLM_MAX_TOC_ENTRIES`
+- `PDFZX_PARTITION_SEED`
 
 ## Schema
 
@@ -94,6 +95,10 @@ Notes:
 - `probe-toc-review`
   - run the ToC-review prompt against one document in SQLite
   - judge ToC validity, topical relevance, and likely preface page
+- `probe-taxonomy-partition`
+  - run the experimental taxonomy-partition prompt against one or more shuffled batches
+  - inspect batch-level `prompt_input` and `parsed_response`
+  - optionally carry `taxonomy_bag_after` forward into the next batch
 - `suggest-llm`
   - run document suggestion over a filtered batch and persist results
 - `suggest-taxonomy`
@@ -142,6 +147,8 @@ Notes:
 - `probe-llm --force` bypasses the same-doc same-prompt duplicate gate
 - `probe-taxonomy` uses `PDFZX_LLM_MAX_TOC_ENTRIES` to cap ToC evidence sent to the model
 - `probe-toc-review` uses the same ToC cap and keeps suggestions separate from canonical document fields
+- `PDFZX_PARTITION_SEED` is the stable seed that future taxonomy-partition batching uses to derive a deterministic document order
+- `PDFZX_PARTITION_CHUNK_SIZE` is the default batch size for taxonomy-partition probing
 - batch suggestion commands support:
   - `--require-digital`
   - `--require-toc`
@@ -188,6 +195,32 @@ Probe one document against the ToC-review prompt:
 pdfzx/.venv/bin/python client.py probe-toc-review --sha256 <sha256>
 ```
 
+Probe one shuffled taxonomy-partition batch:
+
+```bash
+pdfzx/.venv/bin/python client.py probe-taxonomy-partition
+```
+
+Probe three consecutive shuffled batches with batch size 20:
+
+```bash
+pdfzx/.venv/bin/python client.py probe-taxonomy-partition --chunk-size 20 --batch-index 0 --batch-count 3
+```
+
+Probe three consecutive shuffled batches and carry the bag forward:
+
+```bash
+pdfzx/.venv/bin/python client.py probe-taxonomy-partition --chunk-size 20 --batch-index 0 --batch-count 3 --carry-bag
+```
+
+Notes for `probe-taxonomy-partition`:
+
+- it reads all document hashes from SQLite, applies `PDFZX_PARTITION_SEED`, then chunks by `PDFZX_PARTITION_CHUNK_SIZE` or `--chunk-size`
+- `--batch-index` chooses the starting shuffled batch
+- `--batch-count` probes consecutive batches
+- `--carry-bag` feeds each batch's `taxonomy_bag_after` into the next batch as `taxonomy_bag_before`
+- the model does not receive per-document `sha256`, but the client output still includes `batch_sha256s` for local verification
+
 Run taxonomy suggestion for only digital documents that already have ToC:
 
 ```bash
@@ -229,3 +262,7 @@ Run the test suite:
 ```bash
 cd pdfzx && uv run pytest
 ```
+
+# Reference projects
+
+  * https://www.getsortio.com/#faqs

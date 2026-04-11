@@ -177,3 +177,27 @@ def test_get_config_reads_llm_max_toc_entries(
     config = get_config()
 
     assert config.llm_max_toc_entries == 12
+
+
+def test_get_config_reads_partition_seed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PDFZX_PDF_ROOT", str(tmp_path))
+    monkeypatch.setenv("PDFZX_JSON_DB", str(tmp_path / "db.json"))
+    monkeypatch.setenv("PDFZX_PARTITION_SEED", "seed-42")
+
+    config = get_config()
+
+    assert config.partition_seed == "seed-42"
+
+
+def test_get_config_reads_partition_chunk_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PDFZX_PDF_ROOT", str(tmp_path))
+    monkeypatch.setenv("PDFZX_JSON_DB", str(tmp_path / "db.json"))
+    monkeypatch.setenv("PDFZX_PARTITION_CHUNK_SIZE", "25")
+
+    config = get_config()
+
+    assert config.partition_chunk_size == 25

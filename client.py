@@ -13,19 +13,32 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+try:
+    from pdfzx.review import export_review_json
+except ModuleNotFoundError:
+    export_review_json = None
+
 from pdfzx import InventoryJob
 from pdfzx import configure_logging
 from pdfzx.config import DEFAULT_LLM_MAX_TOC_ENTRIES
+from pdfzx.config import DEFAULT_PARTITION_CHUNK_SIZE
+from pdfzx.config import DEFAULT_PARTITION_SEED
 from pdfzx.config import ScanConfig
 from pdfzx.db.migration import migrate_json_to_sqlite
+from pdfzx.db.queries import list_document_sha256s
 from pdfzx.llm_suggestion import batch_document_suggestion
 from pdfzx.llm_suggestion import probe_document_suggestion
 from pdfzx.llm_taxonomy import batch_taxonomy_suggestion
 from pdfzx.llm_taxonomy import probe_taxonomy_suggestion
 from pdfzx.llm_toc_review import batch_toc_review_suggestion
 from pdfzx.llm_toc_review import probe_toc_review_suggestion
-from pdfzx.review import export_review_json
+from pdfzx.partitioning.generalize import generalize_taxonomy_bag
+from pdfzx.partitioning.proposal import propose_taxonomy_bags
+from pdfzx.partitioning.sampler import chunk_items
+from pdfzx.partitioning.sampler import seeded_shuffle
+from pdfzx.prompts.taxonomy_partition_proposal import build_sampled_document_summary
 from pdfzx.storage import JsonStorage
+from pdfzx.storage import SqliteStorage
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +92,13 @@ def _default_config() -> ScanConfig:
             "PDFZX_LLM_MAX_TOC_ENTRIES", str(DEFAULT_LLM_MAX_TOC_ENTRIES)
         )
     )
+    partition_seed = os.environ.get("PDFZX_PARTITION_SEED", DEFAULT_PARTITION_SEED)
+    partition_chunk_size = int(
+        os.environ.get(
+            "PDFZX_PARTITION_CHUNK_SIZE",
+            str(DEFAULT_PARTITION_CHUNK_SIZE),
+        )
+    )
     return ScanConfig(
         root_path=root,
         db_path=db,
@@ -90,6 +110,8 @@ def _default_config() -> ScanConfig:
         openai_model=openai_model,
         sqlite3_db_path=sqlite3_db_path,
         llm_max_toc_entries=llm_max_toc_entries,
+        partition_seed=partition_seed,
+        partition_chunk_size=partition_chunk_size,
     )
 
 
@@ -129,6 +151,13 @@ def _emit_json(payload: object) -> None:
 
 def _emit_text(message: str) -> None:
     sys.stdout.write(f"{message}\n")
+
+
+def _export_review_json(*, sqlite_db_path: Path, output_path: Path):
+    if export_review_json is None:
+        msg = "export-review-json is unavailable because pdfzx.review is not installed"
+        raise ModuleNotFoundError(msg)
+    return export_review_json(sqlite_db_path=sqlite_db_path, output_path=output_path)
 
 
 def _add_batch_filter_args(parser: argparse.ArgumentParser) -> None:
@@ -299,7 +328,73 @@ def _emit_batch_result(result: object) -> None:
     _emit_json(asdict(result))
 
 
-def main() -> int:  # noqa: PLR0911,PLR0915
+def _partition_batches(config: ScanConfig, *, chunk_size: int) -> list[list[str]]:
+    sha256s = list_document_sha256s(config.sqlite3_db_path)
+    ordered_sha256s = seeded_shuffle(sha256s, seed=config.partition_seed)
+    return chunk_items(ordered_sha256s, chunk_size=chunk_size)
+
+
+def _probe_partition_runs(  # noqa: PLR0913
+    config: ScanConfig,
+    *,
+    batch_index: int,
+    batch_count: int,
+    chunk_size: int,
+    bag: list[str],
+    bag_size_limit: int,
+    carry_bag: bool,
+) -> list[dict[str, object]]:
+    batches = _partition_batches(config, chunk_size=chunk_size)
+    if batch_count <= 0:
+        msg = "batch_count must be greater than 0"
+        raise ValueError(msg)
+    end_batch_index = batch_index + batch_count - 1
+    if batch_index < 0 or end_batch_index >= len(batches):
+        msg = (
+            f"batch range out of range: {batch_index}..{end_batch_index} "
+            f"(available: 0..{max(len(batches) - 1, 0)})"
+        )
+        raise ValueError(msg)
+    registry = SqliteStorage(config.sqlite3_db_path).load()
+    current_bag = list(bag)
+    runs: list[dict[str, object]] = []
+    for current_batch_index in range(batch_index, batch_index + batch_count):
+        batch_sha256s = batches[current_batch_index]
+        chunk_documents = [
+            build_sampled_document_summary(registry.documents[sha256]) for sha256 in batch_sha256s
+        ]
+        result = propose_taxonomy_bags(
+            batch_index=current_batch_index,
+            chunk_documents=chunk_documents,
+            taxonomy_bag_before=current_bag,
+            bag_size_limit=bag_size_limit,
+            online_features=config.online_features,
+            openai_api_key=config.openai_api_key,
+            openai_model=config.openai_model,
+        )
+        runs.append(
+            {
+                "batch_index": current_batch_index,
+                "batch_size": len(batch_sha256s),
+                "batch_sha256s": batch_sha256s,
+                "prompt_input": result.prompt_input,
+                "parsed_response": result.parsed_response,
+            }
+        )
+        if carry_bag:
+            current_bag = result.parsed_response.get("taxonomy_bag_after", [])
+    return runs
+
+
+def _candidate_counts_from_runs(runs: list[dict[str, object]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for run in runs:
+        for item in run.get("parsed_response", {}).get("taxonomy_bag_after", []):
+            counts[item] = counts.get(item, 0) + 1
+    return counts
+
+
+def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
     """Run the pdfzx user script entrypoint."""
     _load_env()
     default_config = _default_config()
@@ -376,6 +471,88 @@ def main() -> int:  # noqa: PLR0911,PLR0915
         default=Path("review.json"),
         help="Target review JSON path.",
     )
+    partition_probe_parser = subparsers.add_parser(
+        "probe-taxonomy-partition",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help="Probe the taxonomy-partition prompt against one shuffled batch.",
+    )
+    partition_probe_parser.add_argument(
+        "--batch-index",
+        type=int,
+        default=0,
+        help="Zero-based shuffled batch index to probe.",
+    )
+    partition_probe_parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=default_config.partition_chunk_size,
+        help="Override the partition chunk size for this probe command.",
+    )
+    partition_probe_parser.add_argument(
+        "--batch-count",
+        type=int,
+        default=1,
+        help="Number of consecutive shuffled batches to probe.",
+    )
+    partition_probe_parser.add_argument(
+        "--bag",
+        nargs="*",
+        default=[],
+        help="Optional taxonomy bag items to pass as the current working bag.",
+    )
+    partition_probe_parser.add_argument(
+        "--bag-size-limit",
+        type=int,
+        default=10,
+        help="Maximum number of taxonomy bag items to request from the model.",
+    )
+    partition_probe_parser.add_argument(
+        "--carry-bag",
+        action="store_true",
+        help="Feed each batch's taxonomy_bag_after into the next batch as taxonomy_bag_before.",
+    )
+    partition_generalize_parser = subparsers.add_parser(
+        "probe-taxonomy-partition-generalize",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help="Probe final taxonomy generalization over one or more shuffled partition batches.",
+    )
+    partition_generalize_parser.add_argument(
+        "--batch-index",
+        type=int,
+        default=0,
+        help="Zero-based shuffled batch index to start from.",
+    )
+    partition_generalize_parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=default_config.partition_chunk_size,
+        help="Override the partition chunk size for this probe command.",
+    )
+    partition_generalize_parser.add_argument(
+        "--batch-count",
+        type=int,
+        default=1,
+        help="Number of consecutive shuffled batches to accumulate before generalizing.",
+    )
+    partition_generalize_parser.add_argument(
+        "--bag",
+        nargs="*",
+        default=[],
+        help="Optional taxonomy bag items to pass into the accumulation stage.",
+    )
+    partition_generalize_parser.add_argument(
+        "--bag-size-limit",
+        type=int,
+        default=10,
+        help="Maximum number of taxonomy bag items to request from the model.",
+    )
+    partition_generalize_parser.add_argument(
+        "--carry-bag",
+        action="store_true",
+        help="Feed each accumulation batch's taxonomy_bag_after into the next batch.",
+    )
     for spec in workflow_specs:
         _add_probe_workflow_parser(subparsers, default_config, spec)
         _add_batch_workflow_parser(subparsers, default_config, spec)
@@ -395,6 +572,8 @@ def main() -> int:  # noqa: PLR0911,PLR0915
         openai_model=default_config.openai_model,
         sqlite3_db_path=getattr(args, "sqlite_db", default_config.sqlite3_db_path),
         llm_max_toc_entries=default_config.llm_max_toc_entries,
+        partition_seed=default_config.partition_seed,
+        partition_chunk_size=default_config.partition_chunk_size,
     )
     inventory = InventoryJob(root=config.root_path, config=config, log_level=args.log_level)
 
@@ -424,7 +603,7 @@ def main() -> int:  # noqa: PLR0911,PLR0915
         )
         return 0
     if args.command == "export-review-json":
-        payload = export_review_json(
+        payload = _export_review_json(
             sqlite_db_path=config.sqlite3_db_path,
             output_path=args.output,
         )
@@ -432,6 +611,76 @@ def main() -> int:  # noqa: PLR0911,PLR0915
             {
                 "output_path": str(args.output.resolve()),
                 "row_count": payload.row_count,
+            }
+        )
+        return 0
+    if args.command == "probe-taxonomy-partition":
+        batches = _partition_batches(config, chunk_size=args.chunk_size)
+        if not batches:
+            _emit_json({"batch_index": args.batch_index, "batch_size": 0, "batch_sha256s": []})
+            return 0
+        runs = _probe_partition_runs(
+            config,
+            batch_index=args.batch_index,
+            batch_count=args.batch_count,
+            chunk_size=args.chunk_size,
+            bag=args.bag,
+            bag_size_limit=args.bag_size_limit,
+            carry_bag=args.carry_bag,
+        )
+        _emit_json(
+            {
+                "seed": config.partition_seed,
+                "chunk_size": args.chunk_size,
+                "batch_index": args.batch_index,
+                "batch_count": args.batch_count,
+                "carry_bag": args.carry_bag,
+                "runs": runs,
+            }
+        )
+        return 0
+    if args.command == "probe-taxonomy-partition-generalize":
+        batches = _partition_batches(config, chunk_size=args.chunk_size)
+        if not batches:
+            _emit_json(
+                {
+                    "batch_index": args.batch_index,
+                    "batch_count": args.batch_count,
+                    "chunk_size": args.chunk_size,
+                    "runs": [],
+                    "candidate_counts": {},
+                }
+            )
+            return 0
+        runs = _probe_partition_runs(
+            config,
+            batch_index=args.batch_index,
+            batch_count=args.batch_count,
+            chunk_size=args.chunk_size,
+            bag=args.bag,
+            bag_size_limit=args.bag_size_limit,
+            carry_bag=args.carry_bag,
+        )
+        candidate_counts = _candidate_counts_from_runs(runs)
+        result = generalize_taxonomy_bag(
+            taxonomy_bag_before=list(candidate_counts),
+            candidate_counts=candidate_counts,
+            bag_size_limit=args.bag_size_limit,
+            online_features=config.online_features,
+            openai_api_key=config.openai_api_key,
+            openai_model=config.openai_model,
+        )
+        _emit_json(
+            {
+                "seed": config.partition_seed,
+                "chunk_size": args.chunk_size,
+                "batch_index": args.batch_index,
+                "batch_count": args.batch_count,
+                "carry_bag": args.carry_bag,
+                "runs": runs,
+                "candidate_counts": candidate_counts,
+                "generalize_prompt_input": result.prompt_input,
+                "generalize_parsed_response": result.parsed_response,
             }
         )
         return 0

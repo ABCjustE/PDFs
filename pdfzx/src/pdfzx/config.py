@@ -9,6 +9,8 @@ from pydantic import BaseModel
 from pydantic import field_validator
 
 DEFAULT_LLM_MAX_TOC_ENTRIES = 30
+DEFAULT_PARTITION_SEED = "pdfzx-partition-v1"
+DEFAULT_PARTITION_CHUNK_SIZE = 50
 
 
 class ScanConfig(BaseModel):
@@ -26,6 +28,8 @@ class ScanConfig(BaseModel):
     openai_model: str = "gpt-4o-mini"
     sqlite3_db_path: Path = Path("./db.sqlite3")
     llm_max_toc_entries: int = DEFAULT_LLM_MAX_TOC_ENTRIES
+    partition_seed: str = DEFAULT_PARTITION_SEED
+    partition_chunk_size: int = DEFAULT_PARTITION_CHUNK_SIZE
 
     @field_validator("root_path")
     @classmethod
@@ -105,6 +109,13 @@ def get_config() -> ScanConfig:
             "PDFZX_LLM_MAX_TOC_ENTRIES", str(DEFAULT_LLM_MAX_TOC_ENTRIES)
         )
     )
+    partition_seed = os.environ.get("PDFZX_PARTITION_SEED", DEFAULT_PARTITION_SEED)
+    partition_chunk_size = int(
+        os.environ.get(
+            "PDFZX_PARTITION_CHUNK_SIZE",
+            str(DEFAULT_PARTITION_CHUNK_SIZE),
+        )
+    )
     return ScanConfig(
         root_path=Path(root),
         db_path=Path(db),
@@ -116,4 +127,6 @@ def get_config() -> ScanConfig:
         openai_model=openai_model,
         sqlite3_db_path=Path(sqlite3_db_path),
         llm_max_toc_entries=llm_max_toc_entries,
+        partition_seed=partition_seed,
+        partition_chunk_size=partition_chunk_size,
     )
