@@ -257,6 +257,37 @@ def _show_taxonomy_assignments(
     )
 
 
+def _apply_taxonomy_assignments(
+    sqlite_db_path: Path,
+    *,
+    node_path: str,
+    minimum_confidence: str,
+    exclude_path_keywords: list[str],
+) -> dict[str, object]:
+    engine = create_sqlite_engine(sqlite_db_path)
+    try:
+        with Session(engine) as session:
+            repo = TaxonomyTreeRepository(session)
+            node = repo.get_node_by_path(path=node_path)
+            if node is None:
+                msg = f"Taxonomy node not found: {node_path}"
+                raise ValueError(msg)
+            summary = repo.apply_assignments(
+                node_id=node.id,
+                minimum_confidence=minimum_confidence,
+                exclude_path_keywords=exclude_path_keywords,
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+    return {
+        "node_path": node_path,
+        "minimum_confidence": minimum_confidence,
+        "exclude_path_keywords": exclude_path_keywords,
+        **summary,
+    }
+
+
 def _export_review_json(*, sqlite_db_path: Path, output_path: Path):
     if export_review_json is None:
         msg = "export-review-json is unavailable because pdfzx.review is not installed"
@@ -1311,6 +1342,29 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
         default=0,
         help="Start offset into the node's assignment rows.",
     )
+    apply_assignments_parser = subparsers.add_parser(
+        "apply-taxonomy-assignments",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help="Apply pending taxonomy assignments into child node memberships.",
+    )
+    apply_assignments_parser.add_argument(
+        "--node-path",
+        required=True,
+        help="Taxonomy node path whose pending assignments will be applied.",
+    )
+    apply_assignments_parser.add_argument(
+        "--minimum-confidence",
+        choices=["high", "medium", "low"],
+        default="high",
+        help="Only apply pending assignments at or above this confidence.",
+    )
+    apply_assignments_parser.add_argument(
+        "--exclude-path-keyword",
+        action="append",
+        default=[],
+        help="Skip applying assignments for documents whose current path contains this keyword.",
+    )
     subparsers.add_parser(
         "bootstrap-taxonomy-root",
         parents=[_base_parser(default_config)],
@@ -1447,6 +1501,16 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
                 node_path=args.node_path,
                 limit=args.limit,
                 offset=args.offset,
+            )
+        )
+        return 0
+    if args.command == "apply-taxonomy-assignments":
+        _emit_json(
+            _apply_taxonomy_assignments(
+                config.sqlite3_db_path,
+                node_path=args.node_path,
+                minimum_confidence=args.minimum_confidence,
+                exclude_path_keywords=args.exclude_path_keyword,
             )
         )
         return 0

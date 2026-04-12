@@ -45,6 +45,7 @@ Client probes:
   - `run-taxonomy-partition`
   - `run-taxonomy-assign`
   - `show-taxonomy-assignments`
+  - `apply-taxonomy-assignments`
 
 Tree persistence:
 
@@ -95,6 +96,12 @@ Show readable assignment rows for one node:
 
 ```bash
 python client.py show-taxonomy-assignments --node-path Root --limit 50 --offset 0
+```
+
+Apply pending high-confidence assignments into child memberships:
+
+```bash
+python client.py apply-taxonomy-assignments --node-path Root --minimum-confidence high --exclude-path-keyword HKUSTthings --exclude-path-keyword ait38 --exclude-path-keyword ff48
 ```
 
 Run persisted node partitioning:
@@ -148,6 +155,12 @@ Shared partition args:
 - `--limit`
 - `--offset`
 
+`apply-taxonomy-assignments` takes:
+
+- `--node-path`
+- `--minimum-confidence`
+- repeated `--exclude-path-keyword`
+
 `probe-taxonomy-assign` behavior:
 
 - uses the target node's existing child labels as the only allowed assignment targets
@@ -184,6 +197,15 @@ Shared partition args:
   - `assigned`
   - `confidence`
   - `reasoning`
+
+`apply-taxonomy-assignments` behavior:
+
+- reads pending rows from `taxonomy_assignments`
+- applies only rows at or above `--minimum-confidence`
+- adds applied documents to the assigned child node membership in `taxonomy_node_documents`
+- changes those assignment rows from `pending` to `applied`
+- leaves low-confidence, already-applied, or excluded rows untouched
+- repeated `--exclude-path-keyword` values skip documents whose current path contains any of those keywords
 
 ## Current Workflow
 
@@ -243,7 +265,6 @@ That means the current implementation is useful for:
 
 Missing pieces:
 
-- a CLI apply step for high-confidence assignments into child memberships
 - recursive orchestration of partition -> assign -> apply across child nodes
 
 ## Tree Model

@@ -249,7 +249,7 @@ def test_taxonomy_tree_repository_applies_high_confidence_assignments(tmp_path) 
                 status="pending",
             )
             summary = repo.apply_assignments(node_id=root.id, minimum_confidence="high")
-            assert summary == {"applied": 1, "skipped": 1}
+            assert summary == {"applied": 1, "skipped": 1, "excluded": 0}
             assert repo.list_document_sha256s(node_id=physics.id) == ["a"]
             assignments = repo.list_assignments(node_id=root.id)
             assert assignments[0].status == "applied"
@@ -300,6 +300,78 @@ def test_taxonomy_tree_repository_lists_assignment_views(tmp_path) -> None:
             assert rows[0].confidence == "high"
             assert rows[0].status == "pending"
             assert rows[0].reasoning_summary == "Path strongly indicates physics."
+            session.commit()
+    finally:
+        engine.dispose()
+
+
+def test_taxonomy_tree_repository_applies_with_path_keyword_exclusions(tmp_path) -> None:
+    db_path = tmp_path / "db.sqlite3"
+    init_sqlite_db(db_path)
+    engine = create_sqlite_engine(db_path)
+    try:
+        with Session(engine) as session:
+            session.add_all(
+                [
+                    Document(
+                        sha256="a",
+                        md5="a" * 32,
+                        file_name="a.pdf",
+                        metadata_extra_json={},
+                        languages_json=[],
+                        is_digital=True,
+                        force_extracted=False,
+                    ),
+                    Document(
+                        sha256="b",
+                        md5="b" * 32,
+                        file_name="b.pdf",
+                        metadata_extra_json={},
+                        languages_json=[],
+                        is_digital=True,
+                        force_extracted=False,
+                    ),
+                ]
+            )
+            session.add_all(
+                [
+                    DocumentPath(sha256="a", rel_path="Books/Physics/a.pdf"),
+                    DocumentPath(sha256="b", rel_path="HKUSTthings/Physics/b.pdf"),
+                ]
+            )
+            repo = TaxonomyTreeRepository(session)
+            root = repo.ensure_root_node()
+            physics = repo.ensure_child_node(
+                parent_id=root.id,
+                parent_path=root.path,
+                name="Physics",
+            )
+            repo.upsert_assignment(
+                node_id=root.id,
+                sha256="a",
+                assigned_child_id=physics.id,
+                confidence="high",
+                reasoning_summary="Physics path is obvious.",
+                status="pending",
+            )
+            repo.upsert_assignment(
+                node_id=root.id,
+                sha256="b",
+                assigned_child_id=physics.id,
+                confidence="high",
+                reasoning_summary="Physics path is obvious.",
+                status="pending",
+            )
+            summary = repo.apply_assignments(
+                node_id=root.id,
+                minimum_confidence="high",
+                exclude_path_keywords=["hkustthings"],
+            )
+            assert summary == {"applied": 1, "skipped": 0, "excluded": 1}
+            assert repo.list_document_sha256s(node_id=physics.id) == ["a"]
+            assignments = repo.list_assignments(node_id=root.id)
+            assert assignments[0].status == "applied"
+            assert assignments[1].status == "pending"
             session.commit()
     finally:
         engine.dispose()

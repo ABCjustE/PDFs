@@ -289,13 +289,22 @@ class TaxonomyTreeRepository:
         *,
         node_id: int,
         minimum_confidence: str = "high",
+        exclude_path_keywords: list[str] | None = None,
     ) -> dict[str, int]:
         """Apply pending assignments above a confidence threshold to child memberships."""
         confidence_order = {"low": 0, "medium": 1, "high": 2}
         minimum_rank = confidence_order[minimum_confidence]
         applied = 0
         skipped = 0
-        for assignment in self.list_assignments(node_id=node_id):
+        excluded = 0
+        keywords = [keyword.lower() for keyword in exclude_path_keywords or []]
+        stmt = (
+            select(TaxonomyAssignment)
+            .options(selectinload(TaxonomyAssignment.document).selectinload(Document.paths))
+            .where(TaxonomyAssignment.node_id == node_id)
+            .order_by(TaxonomyAssignment.sha256.asc())
+        )
+        for assignment in self._session.scalars(stmt):
             if assignment.status != "pending":
                 skipped += 1
                 continue
@@ -306,12 +315,19 @@ class TaxonomyTreeRepository:
             if confidence_order.get(confidence, -1) < minimum_rank:
                 skipped += 1
                 continue
+            if keywords and any(
+                keyword in path.rel_path.lower()
+                for keyword in keywords
+                for path in assignment.document.paths
+            ):
+                excluded += 1
+                continue
             self.add_documents(node_id=assignment.assigned_child_id, sha256s=[assignment.sha256])
             assignment.status = "applied"
             assignment.updated_at = datetime.now(tz=UTC).replace(tzinfo=None)
             applied += 1
         self._session.flush()
-        return {"applied": applied, "skipped": skipped}
+        return {"applied": applied, "skipped": skipped, "excluded": excluded}
 
     def _existing_document_sha256s(self, sha256s: list[str]) -> list[str]:
         stmt = select(Document.sha256).where(Document.sha256.in_(set(sha256s)))
