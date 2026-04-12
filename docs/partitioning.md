@@ -2,7 +2,7 @@
 
 - root/node bootstrap exists
 - generalized child-node creation exists
-- document-to-child assignment is not implemented yet
+- document-to-child assignment probing and pending-row persistence exist
 
 ## What Is Implemented
 
@@ -41,7 +41,10 @@ Client probes:
 - [client.py](../client.py)
   - `probe-taxonomy-partition`
   - `probe-taxonomy-partition-generalize`
+  - `probe-taxonomy-assign`
   - `run-taxonomy-partition`
+  - `run-taxonomy-assign`
+  - `show-taxonomy-assignments`
 
 Tree persistence:
 
@@ -76,6 +79,24 @@ Probe accumulation plus final generalization:
 python client.py probe-taxonomy-partition-generalize --chunk-size 500 --batch-index 0 --batch-count 7
 ```
 
+Probe one-by-one document assignment under an existing node:
+
+```bash
+python client.py probe-taxonomy-assign --node-path Root --limit 10 --offset 0
+```
+
+Run persisted one-by-one document assignment under an existing node:
+
+```bash
+python client.py run-taxonomy-assign --node-path Root --require-digital --require-toc --limit 100 --offset 0 --max-concurrency 5
+```
+
+Show readable assignment rows for one node:
+
+```bash
+python client.py show-taxonomy-assignments --node-path Root --limit 50 --offset 0
+```
+
 Run persisted node partitioning:
 
 ```bash
@@ -87,7 +108,7 @@ python client.py run-taxonomy-partition --node-path Root --chunk-size 500 --batc
 - if `Root` does not exist, it creates `Root`, syncs all current document hashes into it, and exits
 - rerun the same command after bootstrap to execute the LLM partition flow
 - successful runs persist child `TaxonomyNode` rows under the target parent node
-- no document assignment is written yet
+- reruns replace the existing child subtree under that parent before persisting the new one
 
 Shared partition args:
 
@@ -101,6 +122,68 @@ Shared partition args:
 `run-taxonomy-partition` also takes:
 
 - `--node-path`
+
+`probe-taxonomy-assign` takes:
+
+- `--node-path`
+- `--limit`
+- `--offset`
+- `--require-digital`
+- `--require-toc`
+
+`run-taxonomy-assign` takes:
+
+- `--node-path`
+- `--limit`
+- `--offset`
+- `--require-digital`
+- `--require-toc`
+- `--force`
+- `--max-concurrency`
+- `--output-ndjson`
+
+`show-taxonomy-assignments` takes:
+
+- `--node-path`
+- `--limit`
+- `--offset`
+
+`probe-taxonomy-assign` behavior:
+
+- uses the target node's existing child labels as the only allowed assignment targets
+- probes documents in the node's current membership order
+- filters that membership first when `--require-digital` and/or `--require-toc` are set
+- `--offset` is the start index into that ordered membership list
+- no assignment rows or child memberships are persisted
+
+`run-taxonomy-assign` behavior:
+
+- uses the target node's existing child labels as the only allowed assignment targets
+- filters the node's current membership first when `--require-digital` and/or `--require-toc` are set
+- skips existing `(node_id, sha256)` assignment rows by default
+- `--force` re-requests and overwrites existing assignment rows for the selected documents
+- persists `TaxonomyAssignment` rows with:
+  - `assigned_child_id`
+  - `confidence`
+  - `reasoning_summary`
+  - `status="pending"`
+- persists successful rows incrementally as results complete
+- retries rate-limit failures with backoff
+- appends per-item progress to `--output-ndjson` when configured
+- does not mutate `taxonomy_node_documents`
+- higher-confidence apply logic exists in the repository layer, but is not exposed as a CLI command yet
+
+`show-taxonomy-assignments` behavior:
+
+- reads from `taxonomy_assignments`
+- joins readable document and node paths
+- hides raw ids and hashes
+- shows:
+  - `node`
+  - `document`
+  - `assigned`
+  - `confidence`
+  - `reasoning`
 
 ## Current Workflow
 
@@ -118,7 +201,11 @@ The current persisted run adds one more step:
 
 8. create child nodes under the target parent from the generalized taxonomy bag
 
-This is enough to test top-layer discovery and persist child nodes, but not enough to recursively partition documents yet.
+The current assignment run adds another separate step:
+
+9. assign documents under one parent node into the parent's existing child labels and persist pending assignment rows
+
+This is enough to test top-layer discovery, persist child nodes, and persist reviewable document-to-child assignment guesses. It is still not a full recursive orchestration flow.
 
 ## What Improved
 
@@ -156,9 +243,8 @@ That means the current implementation is useful for:
 
 Missing pieces:
 
-- prompt-driven document assignment into child nodes
-- persistence of `TaxonomyAssignment` rows from an assignment workflow
-- recursive partitioning of child nodes as a higher-level orchestration flow
+- a CLI apply step for high-confidence assignments into child memberships
+- recursive orchestration of partition -> assign -> apply across child nodes
 
 ## Tree Model
 
@@ -171,7 +257,6 @@ Implemented tables:
 - `name`
 - `path`
 - `depth`
-- `status`
 
 ### `taxonomy_node_documents`
 
@@ -188,6 +273,7 @@ Composite key:
 - `sha256`
 - `assigned_child_id`
 - `confidence`
+- `reasoning_summary`
 - `status`
 
 Suggested `status` values:

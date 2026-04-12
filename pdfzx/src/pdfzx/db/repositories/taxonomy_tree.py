@@ -1,16 +1,30 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
 
 from sqlalchemy import delete
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import selectinload
 
 from pdfzx.db.models import Document
 from pdfzx.db.models import TaxonomyAssignment
 from pdfzx.db.models import TaxonomyNode
 from pdfzx.db.models import TaxonomyNodeDocument
+
+
+@dataclass(frozen=True, slots=True)
+class TaxonomyAssignmentView:
+    """Readable assignment row for operator inspection."""
+
+    node_path: str
+    document_path: str | None
+    assigned_path: str | None
+    confidence: str | None
+    status: str
+    reasoning_summary: str | None
 
 
 class TaxonomyTreeRepository:
@@ -80,6 +94,14 @@ class TaxonomyTreeRepository:
     def get_node_by_path(self, *, path: str) -> TaxonomyNode | None:
         """Return one taxonomy node by stable path."""
         stmt = select(TaxonomyNode).where(TaxonomyNode.path == path)
+        return self._session.scalar(stmt)
+
+    def get_child_by_name(self, *, parent_id: int, name: str) -> TaxonomyNode | None:
+        """Return one direct child node by parent and child name."""
+        stmt = select(TaxonomyNode).where(
+            TaxonomyNode.parent_id == parent_id,
+            TaxonomyNode.name == name,
+        )
         return self._session.scalar(stmt)
 
     def list_nodes(self, *, parent_id: int | None = None) -> list[TaxonomyNode]:
@@ -180,13 +202,14 @@ class TaxonomyTreeRepository:
         )
         return list(self._session.scalars(stmt))
 
-    def upsert_assignment(
+    def upsert_assignment(  # noqa: PLR0913
         self,
         *,
         node_id: int,
         sha256: str,
         assigned_child_id: int | None,
         confidence: str | None = None,
+        reasoning_summary: str | None = None,
         status: str = "pending",
     ) -> TaxonomyAssignment:
         """Create or update one assignment decision under a parent node."""
@@ -198,6 +221,7 @@ class TaxonomyTreeRepository:
                 sha256=sha256,
                 assigned_child_id=assigned_child_id,
                 confidence=confidence,
+                reasoning_summary=reasoning_summary,
                 status=status,
                 created_at=now,
                 updated_at=now,
@@ -207,6 +231,7 @@ class TaxonomyTreeRepository:
             return assignment
         assignment.assigned_child_id = assigned_child_id
         assignment.confidence = confidence
+        assignment.reasoning_summary = reasoning_summary
         assignment.status = status
         assignment.updated_at = now
         self._session.flush()
@@ -220,6 +245,73 @@ class TaxonomyTreeRepository:
             .order_by(TaxonomyAssignment.sha256.asc())
         )
         return list(self._session.scalars(stmt))
+
+    def list_assignment_views(
+        self,
+        *,
+        node_id: int,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[TaxonomyAssignmentView]:
+        """Return readable assignment rows for one parent node."""
+        stmt = (
+            select(TaxonomyAssignment)
+            .options(
+                selectinload(TaxonomyAssignment.node),
+                selectinload(TaxonomyAssignment.assigned_child),
+                selectinload(TaxonomyAssignment.document).selectinload(Document.paths),
+            )
+            .where(TaxonomyAssignment.node_id == node_id)
+            .order_by(TaxonomyAssignment.sha256.asc())
+            .offset(offset)
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        rows = []
+        for assignment in self._session.scalars(stmt):
+            document_paths = sorted(path.rel_path for path in assignment.document.paths)
+            rows.append(
+                TaxonomyAssignmentView(
+                    node_path=assignment.node.path,
+                    document_path=document_paths[0] if document_paths else None,
+                    assigned_path=(
+                        assignment.assigned_child.path if assignment.assigned_child else None
+                    ),
+                    confidence=assignment.confidence,
+                    status=assignment.status,
+                    reasoning_summary=assignment.reasoning_summary,
+                )
+            )
+        return rows
+
+    def apply_assignments(
+        self,
+        *,
+        node_id: int,
+        minimum_confidence: str = "high",
+    ) -> dict[str, int]:
+        """Apply pending assignments above a confidence threshold to child memberships."""
+        confidence_order = {"low": 0, "medium": 1, "high": 2}
+        minimum_rank = confidence_order[minimum_confidence]
+        applied = 0
+        skipped = 0
+        for assignment in self.list_assignments(node_id=node_id):
+            if assignment.status != "pending":
+                skipped += 1
+                continue
+            if assignment.assigned_child_id is None:
+                skipped += 1
+                continue
+            confidence = assignment.confidence or "low"
+            if confidence_order.get(confidence, -1) < minimum_rank:
+                skipped += 1
+                continue
+            self.add_documents(node_id=assignment.assigned_child_id, sha256s=[assignment.sha256])
+            assignment.status = "applied"
+            assignment.updated_at = datetime.now(tz=UTC).replace(tzinfo=None)
+            applied += 1
+        self._session.flush()
+        return {"applied": applied, "skipped": skipped}
 
     def _existing_document_sha256s(self, sha256s: list[str]) -> list[str]:
         stmt = select(Document.sha256).where(Document.sha256.in_(set(sha256s)))

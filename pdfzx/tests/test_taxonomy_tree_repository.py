@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from pdfzx.db.models import Document
+from pdfzx.db.models import DocumentPath
 from pdfzx.db.repositories.taxonomy_tree import TaxonomyTreeRepository
 from pdfzx.db.session import create_sqlite_engine
 from pdfzx.db.session import init_sqlite_db
@@ -54,17 +55,21 @@ def test_taxonomy_tree_repository_crud_and_membership(tmp_path) -> None:
                 sha256="b",
                 assigned_child_id=child.id,
                 confidence="high",
+                reasoning_summary="Broad physics fit.",
                 status="pending",
             )
             assert assignment.assigned_child_id == child.id
+            assert assignment.reasoning_summary == "Broad physics fit."
             updated = repo.upsert_assignment(
                 node_id=root.id,
                 sha256="b",
                 assigned_child_id=child.id,
                 confidence="medium",
+                reasoning_summary="Still physics, lower confidence.",
                 status="applied",
             )
             assert updated.confidence == "medium"
+            assert updated.reasoning_summary == "Still physics, lower confidence."
             assert updated.status == "applied"
             assert len(repo.list_assignments(node_id=root.id)) == 1
             repo.update_node(node_id=child.id, name="Physics Updated")
@@ -178,6 +183,7 @@ def test_taxonomy_tree_repository_replaces_child_subtree(tmp_path) -> None:
                 sha256="a",
                 assigned_child_id=physics.id,
                 confidence="high",
+                reasoning_summary="Physics child is the best fit.",
                 status="pending",
             )
             deleted_count = repo.replace_child_subtree(parent_id=root.id)
@@ -186,6 +192,114 @@ def test_taxonomy_tree_repository_replaces_child_subtree(tmp_path) -> None:
             assert repo.get_node(node_id=quantum.id) is None
             assert repo.list_nodes(parent_id=root.id) == []
             assert repo.list_assignments(node_id=root.id) == []
+            session.commit()
+    finally:
+        engine.dispose()
+
+
+def test_taxonomy_tree_repository_applies_high_confidence_assignments(tmp_path) -> None:
+    db_path = tmp_path / "db.sqlite3"
+    init_sqlite_db(db_path)
+    engine = create_sqlite_engine(db_path)
+    try:
+        with Session(engine) as session:
+            session.add_all(
+                [
+                    Document(
+                        sha256="a",
+                        md5="a" * 32,
+                        file_name="a.pdf",
+                        metadata_extra_json={},
+                        languages_json=[],
+                        is_digital=True,
+                        force_extracted=False,
+                    ),
+                    Document(
+                        sha256="b",
+                        md5="b" * 32,
+                        file_name="b.pdf",
+                        metadata_extra_json={},
+                        languages_json=[],
+                        is_digital=True,
+                        force_extracted=False,
+                    ),
+                ]
+            )
+            repo = TaxonomyTreeRepository(session)
+            root = repo.ensure_root_node()
+            physics = repo.ensure_child_node(
+                parent_id=root.id,
+                parent_path=root.path,
+                name="Physics",
+            )
+            repo.upsert_assignment(
+                node_id=root.id,
+                sha256="a",
+                assigned_child_id=physics.id,
+                confidence="high",
+                reasoning_summary="Physics label is obvious.",
+                status="pending",
+            )
+            repo.upsert_assignment(
+                node_id=root.id,
+                sha256="b",
+                assigned_child_id=physics.id,
+                confidence="low",
+                reasoning_summary="Weak physics clue only.",
+                status="pending",
+            )
+            summary = repo.apply_assignments(node_id=root.id, minimum_confidence="high")
+            assert summary == {"applied": 1, "skipped": 1}
+            assert repo.list_document_sha256s(node_id=physics.id) == ["a"]
+            assignments = repo.list_assignments(node_id=root.id)
+            assert assignments[0].status == "applied"
+            assert assignments[1].status == "pending"
+            session.commit()
+    finally:
+        engine.dispose()
+
+
+def test_taxonomy_tree_repository_lists_assignment_views(tmp_path) -> None:
+    db_path = tmp_path / "db.sqlite3"
+    init_sqlite_db(db_path)
+    engine = create_sqlite_engine(db_path)
+    try:
+        with Session(engine) as session:
+            session.add(
+                Document(
+                    sha256="a",
+                    md5="a" * 32,
+                    file_name="a.pdf",
+                    metadata_extra_json={},
+                    languages_json=[],
+                    is_digital=True,
+                    force_extracted=False,
+                )
+            )
+            session.add(DocumentPath(sha256="a", rel_path="Books/Physics/a.pdf"))
+            repo = TaxonomyTreeRepository(session)
+            root = repo.ensure_root_node()
+            physics = repo.ensure_child_node(
+                parent_id=root.id,
+                parent_path=root.path,
+                name="Physics",
+            )
+            repo.upsert_assignment(
+                node_id=root.id,
+                sha256="a",
+                assigned_child_id=physics.id,
+                confidence="high",
+                reasoning_summary="Path strongly indicates physics.",
+                status="pending",
+            )
+            rows = repo.list_assignment_views(node_id=root.id)
+            assert len(rows) == 1
+            assert rows[0].node_path == "Root"
+            assert rows[0].document_path == "Books/Physics/a.pdf"
+            assert rows[0].assigned_path == "Root/Physics"
+            assert rows[0].confidence == "high"
+            assert rows[0].status == "pending"
+            assert rows[0].reasoning_summary == "Path strongly indicates physics."
             session.commit()
     finally:
         engine.dispose()

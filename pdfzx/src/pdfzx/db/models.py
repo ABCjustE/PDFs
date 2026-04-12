@@ -221,6 +221,7 @@ class TaxonomyAssignment(Base):
     sha256: Mapped[str] = mapped_column(ForeignKey("documents.sha256"), primary_key=True)
     assigned_child_id: Mapped[int | None] = mapped_column(ForeignKey("taxonomy_nodes.id"))
     confidence: Mapped[str | None] = mapped_column(String(16))
+    reasoning_summary: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),

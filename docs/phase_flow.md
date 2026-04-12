@@ -31,7 +31,7 @@ merged registry to SQLite. JSON is import/export only.
 
 ```mermaid
 sequenceDiagram
-    participant Client as client.py probe-llm / probe-taxonomy
+    participant Client as client.py probe-llm / probe-taxonomy-* / run-taxonomy-*
     participant DB as SQLite
     participant WF as LLM workflow
     participant PR as PromptRepository

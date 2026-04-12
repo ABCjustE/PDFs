@@ -1,3 +1,5 @@
+from pdfzx.partitioning.assignment import TaxonomyAssignmentResult
+from pdfzx.partitioning.assignment import assign_taxonomy_child
 from pdfzx.partitioning.generalize import PartitionGeneralizeResult
 from pdfzx.partitioning.generalize import generalize_taxonomy_bag
 from pdfzx.partitioning.proposal import PartitionProposalResult
@@ -11,6 +13,8 @@ __all__ = [
     "PartitionGeneralizeResult",
     "PartitionProposalResult",
     "SampledDocumentSummary",
+    "TaxonomyAssignmentResult",
+    "assign_taxonomy_child",
     "build_sampled_document_summary",
     "chunk_items",
     "generalize_taxonomy_bag",

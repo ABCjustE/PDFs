@@ -6,7 +6,11 @@ import argparse
 import json
 import os
 import sys
+import threading
+import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import as_completed
 from dataclasses import asdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,10 +37,13 @@ from pdfzx.llm_suggestion import batch_document_suggestion
 from pdfzx.llm_suggestion import probe_document_suggestion
 from pdfzx.llm_toc_review import batch_toc_review_suggestion
 from pdfzx.llm_toc_review import probe_toc_review_suggestion
+from pdfzx.models import Registry
+from pdfzx.partitioning.assignment import assign_taxonomy_child
 from pdfzx.partitioning.generalize import generalize_taxonomy_bag
 from pdfzx.partitioning.proposal import propose_taxonomy_bags
 from pdfzx.partitioning.sampler import chunk_items
 from pdfzx.partitioning.sampler import seeded_shuffle
+from pdfzx.prompts.taxonomy_assignment import build_taxonomy_assignment_prompt_input
 from pdfzx.prompts.taxonomy_partition_proposal import build_sampled_document_summary
 from pdfzx.storage import JsonStorage
 from pdfzx.storage import SqliteStorage
@@ -154,6 +161,102 @@ def _emit_text(message: str) -> None:
     sys.stdout.write(f"{message}\n")
 
 
+def _truncate_reasoning(value: str | None, *, width: int) -> str:
+    text = (value or "").replace("\n", " ").strip()
+    if len(text) <= width:
+        return text
+    return f"{text[: max(0, width - 1)]}…"
+
+
+def _render_table(rows: list[dict[str, str]], *, columns: list[tuple[str, str, int]]) -> str:
+    headers = [header for _, header, _ in columns]
+    widths = [
+        max(width, len(header), *(len(row[key]) for row in rows))
+        for key, header, width in columns
+    ]
+    header_row = " | ".join(
+        header.ljust(width) for header, width in zip(headers, widths, strict=True)
+    )
+    divider = "-+-".join("-" * width for width in widths)
+    body = [
+        " | ".join(
+            row[key].ljust(width)
+            for (key, _, _), width in zip(columns, widths, strict=True)
+        )
+        for row in rows
+    ]
+    return "\n".join([header_row, divider, *body])
+
+
+def _append_ndjson(path: Path | None, payload: dict[str, object]) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(f"{json.dumps(payload, ensure_ascii=False)}\n")
+
+
+class _RequestThrottle:
+    def __init__(self, *, min_interval_seconds: float) -> None:
+        self._min_interval_seconds = min_interval_seconds
+        self._lock = threading.Lock()
+        self._last_started_at = 0.0
+
+    def wait_turn(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            elapsed = now - self._last_started_at
+            if elapsed < self._min_interval_seconds:
+                time.sleep(self._min_interval_seconds - elapsed)
+            self._last_started_at = time.monotonic()
+
+
+def _show_taxonomy_assignments(
+    sqlite_db_path: Path,
+    *,
+    node_path: str,
+    limit: int | None,
+    offset: int,
+) -> str:
+    engine = create_sqlite_engine(sqlite_db_path)
+    try:
+        with Session(engine) as session:
+            repo = TaxonomyTreeRepository(session)
+            node = repo.get_node_by_path(path=node_path)
+            if node is None:
+                msg = f"Taxonomy node not found: {node_path}"
+                raise ValueError(msg)
+            assignment_rows = repo.list_assignment_views(
+                node_id=node.id,
+                limit=limit,
+                offset=offset,
+            )
+    finally:
+        engine.dispose()
+    if not assignment_rows:
+        return f"No taxonomy assignments found for node: {node_path}"
+    rows = [
+        {
+            "node_path": (row.node_path or "").replace("\n", " ").strip(),
+            "document_path": (row.document_path or "").replace("\n", " ").strip(),
+            "assigned_path": (row.assigned_path or "").replace("\n", " ").strip(),
+            "confidence": (row.confidence or "").replace("\n", " ").strip(),
+            "reasoning": _truncate_reasoning(row.reasoning_summary, width=100),
+        }
+        for row in assignment_rows
+    ]
+    return _render_table(
+        rows,
+        columns=[
+            ("node_path", "node", 18),
+            ("document_path", "document", 48),
+            ("assigned_path", "assigned", 28),
+            ("confidence", "confidence", 10),
+            ("reasoning", "reasoning", 48),
+        ],
+    )
+
+
 def _export_review_json(*, sqlite_db_path: Path, output_path: Path):
     if export_review_json is None:
         msg = "export-review-json is unavailable because pdfzx.review is not installed"
@@ -195,6 +298,24 @@ def _add_batch_filter_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Append one JSON record per batch item with prompt input and parsed response.",
     )
+
+
+def _filter_document_sha256s(
+    registry: Registry,
+    sha256s: list[str],
+    *,
+    require_digital: bool,
+    require_toc: bool,
+) -> list[str]:
+    filtered = []
+    for sha256 in sha256s:
+        record = registry.documents[sha256]
+        if require_digital and not record.is_digital:
+            continue
+        if require_toc and not record.toc:
+            continue
+        filtered.append(sha256)
+    return filtered
 
 
 def _add_partition_args(
@@ -593,6 +714,331 @@ def _ensure_taxonomy_node(
         engine.dispose()
 
 
+def _taxonomy_node_probe_context(
+    sqlite_db_path: Path, *, node_path: str
+) -> tuple[int, list[str], list[str]]:
+    engine = create_sqlite_engine(sqlite_db_path)
+    try:
+        with Session(engine) as session:
+            repo = TaxonomyTreeRepository(session)
+            node = repo.get_node_by_path(path=node_path)
+            if node is None:
+                msg = f"Taxonomy node not found: {node_path}"
+                raise ValueError(msg)
+            child_labels = [child.name for child in repo.list_nodes(parent_id=node.id)]
+            if not child_labels:
+                msg = f"Taxonomy node has no child labels: {node_path}"
+                raise ValueError(msg)
+            return node.id, child_labels, repo.list_document_sha256s(node_id=node.id)
+    finally:
+        engine.dispose()
+
+
+def _probe_taxonomy_assignments(  # noqa: PLR0913
+    config: ScanConfig,
+    *,
+    node_path: str,
+    limit: int,
+    offset: int,
+    require_digital: bool,
+    require_toc: bool,
+) -> dict[str, object]:
+    node_id, child_labels, node_sha256s = _taxonomy_node_probe_context(
+        config.sqlite3_db_path,
+        node_path=node_path,
+    )
+    registry = SqliteStorage(config.sqlite3_db_path).load()
+    filtered_sha256s = _filter_document_sha256s(
+        registry,
+        node_sha256s,
+        require_digital=require_digital,
+        require_toc=require_toc,
+    )
+    batch_sha256s = filtered_sha256s[offset : offset + limit]
+    results: list[dict[str, object]] = []
+    for sha256 in batch_sha256s:
+        record = registry.documents[sha256]
+        prompt_input = build_taxonomy_assignment_prompt_input(
+            node_path=node_path,
+            child_labels=child_labels,
+            record=record,
+        )
+        result = assign_taxonomy_child(
+            prompt_input=prompt_input,
+            online_features=config.online_features,
+            openai_api_key=config.openai_api_key,
+            openai_model=config.openai_model,
+        )
+        results.append(
+            {
+                "sha256": sha256,
+                "prompt_input": result.prompt_input,
+                "parsed_response": result.parsed_response,
+            }
+        )
+    return {
+        "node_id": node_id,
+        "node_path": node_path,
+        "child_labels": child_labels,
+        "total_documents": len(node_sha256s),
+        "filtered_documents": len(filtered_sha256s),
+        "require_digital": require_digital,
+        "require_toc": require_toc,
+        "offset": offset,
+        "limit": limit,
+        "results": results,
+    }
+
+
+def _run_taxonomy_assignments(  # noqa: PLR0913,PLR0915
+    config: ScanConfig,
+    *,
+    node_path: str,
+    limit: int | None,
+    offset: int,
+    max_concurrency: int,
+    require_digital: bool,
+    require_toc: bool,
+    force: bool,
+    output_ndjson: Path | None,
+) -> dict[str, object]:
+    node_id, child_labels, node_sha256s = _taxonomy_node_probe_context(
+        config.sqlite3_db_path,
+        node_path=node_path,
+    )
+    registry = SqliteStorage(config.sqlite3_db_path).load()
+    filtered_sha256s = _filter_document_sha256s(
+        registry,
+        node_sha256s,
+        require_digital=require_digital,
+        require_toc=require_toc,
+    )
+    batch_sha256s = (
+        filtered_sha256s[offset:]
+        if limit is None
+        else filtered_sha256s[offset : offset + limit]
+    )
+    engine = create_sqlite_engine(config.sqlite3_db_path)
+    try:
+        with Session(engine) as session:
+            repo = TaxonomyTreeRepository(session)
+            existing_assignment_sha256s = {
+                assignment.sha256 for assignment in repo.list_assignments(node_id=node_id)
+            }
+            child_id_by_name = {
+                child.name: child.id for child in repo.list_nodes(parent_id=node_id)
+            }
+    finally:
+        engine.dispose()
+    skipped_existing_sha256s = [] if force else [
+        sha256 for sha256 in batch_sha256s if sha256 in existing_assignment_sha256s
+    ]
+    request_sha256s = batch_sha256s if force else [
+        sha256 for sha256 in batch_sha256s if sha256 not in existing_assignment_sha256s
+    ]
+    prompt_inputs = [
+        (
+            sha256,
+            build_taxonomy_assignment_prompt_input(
+                node_path=node_path,
+                child_labels=child_labels,
+                record=registry.documents[sha256],
+            ),
+        )
+        for sha256 in request_sha256s
+    ]
+    results: list[dict[str, object]] = [
+        {"sha256": sha256, "skipped_existing": True, "persisted": False}
+        for sha256 in skipped_existing_sha256s
+    ]
+    for sha256 in skipped_existing_sha256s:
+        _append_ndjson(
+            output_ndjson,
+            {
+                "workflow": "taxonomy_assignment",
+                "node_path": node_path,
+                "sha256": sha256,
+                "status": "skipped_existing",
+                "reason": "existing assignment row present",
+                "prompt_input": None,
+                "parsed_response": None,
+                "persisted": False,
+            },
+        )
+    persisted = 0
+    failed = 0
+    throttle = _RequestThrottle(min_interval_seconds=0.35)
+    try:
+        with Session(engine) as session:
+            repo = TaxonomyTreeRepository(session)
+            def persist_result(sha256: str, result) -> None:
+                assigned_child_id = child_id_by_name.get(result.parsed_response["assigned_child"])
+                if assigned_child_id is None:
+                    msg = (
+                        "LLM assignment returned an unknown child label after validation: "
+                        f"{result.parsed_response['assigned_child']}"
+                    )
+                    raise ValueError(msg)
+                repo.upsert_assignment(
+                    node_id=node_id,
+                    sha256=sha256,
+                    assigned_child_id=assigned_child_id,
+                    confidence=result.parsed_response["confidence"],
+                    reasoning_summary=result.parsed_response["reasoning_summary"],
+                    status="pending",
+                )
+                session.commit()
+
+            if max_concurrency <= 1:
+                for sha256, prompt_input in prompt_inputs:
+                    try:
+                        throttle.wait_turn()
+                        result = assign_taxonomy_child(
+                            prompt_input=prompt_input,
+                            online_features=config.online_features,
+                            openai_api_key=config.openai_api_key,
+                            openai_model=config.openai_model,
+                        )
+                        persist_result(sha256, result)
+                    except Exception as exc:
+                        session.rollback()
+                        failed += 1
+                        results.append(
+                            {
+                                "sha256": sha256,
+                                "prompt_input": prompt_input,
+                                "persisted": False,
+                                "error": str(exc),
+                            }
+                        )
+                        _append_ndjson(
+                            output_ndjson,
+                            {
+                                "workflow": "taxonomy_assignment",
+                                "node_path": node_path,
+                                "sha256": sha256,
+                                "status": "failed",
+                                "reason": str(exc),
+                                "prompt_input": prompt_input,
+                                "parsed_response": None,
+                                "persisted": False,
+                            },
+                        )
+                        continue
+                    persisted += 1
+                    results.append(
+                        {
+                            "sha256": sha256,
+                            "prompt_input": result.prompt_input,
+                            "parsed_response": result.parsed_response,
+                            "persisted": True,
+                        }
+                    )
+                    _append_ndjson(
+                        output_ndjson,
+                        {
+                            "workflow": "taxonomy_assignment",
+                            "node_path": node_path,
+                            "sha256": sha256,
+                            "status": "persisted",
+                            "reason": "assignment request completed",
+                            "prompt_input": result.prompt_input,
+                            "parsed_response": result.parsed_response,
+                            "persisted": True,
+                        },
+                    )
+            else:
+                with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
+                    def submit_assignment(sha256: str, prompt_input):
+                        throttle.wait_turn()
+                        return assign_taxonomy_child(
+                            prompt_input=prompt_input,
+                            online_features=config.online_features,
+                            openai_api_key=config.openai_api_key,
+                            openai_model=config.openai_model,
+                        )
+
+                    future_map = {
+                        executor.submit(
+                            submit_assignment,
+                            sha256,
+                            prompt_input,
+                        ): (sha256, prompt_input)
+                        for sha256, prompt_input in prompt_inputs
+                    }
+                    for future in as_completed(future_map):
+                        sha256, prompt_input = future_map[future]
+                        try:
+                            result = future.result()
+                            persist_result(sha256, result)
+                        except Exception as exc:
+                            session.rollback()
+                            failed += 1
+                            results.append(
+                                {
+                                    "sha256": sha256,
+                                    "prompt_input": prompt_input,
+                                    "persisted": False,
+                                    "error": str(exc),
+                                }
+                            )
+                            _append_ndjson(
+                                output_ndjson,
+                                {
+                                    "workflow": "taxonomy_assignment",
+                                    "node_path": node_path,
+                                    "sha256": sha256,
+                                    "status": "failed",
+                                    "reason": str(exc),
+                                    "prompt_input": prompt_input,
+                                    "parsed_response": None,
+                                    "persisted": False,
+                                },
+                            )
+                            continue
+                        persisted += 1
+                        results.append(
+                            {
+                                "sha256": sha256,
+                                "prompt_input": result.prompt_input,
+                                "parsed_response": result.parsed_response,
+                                "persisted": True,
+                            }
+                        )
+                        _append_ndjson(
+                            output_ndjson,
+                            {
+                                "workflow": "taxonomy_assignment",
+                                "node_path": node_path,
+                                "sha256": sha256,
+                                "status": "persisted",
+                                "reason": "assignment request completed",
+                                "prompt_input": result.prompt_input,
+                                "parsed_response": result.parsed_response,
+                                "persisted": True,
+                            },
+                        )
+    finally:
+        engine.dispose()
+    return {
+        "node_id": node_id,
+        "node_path": node_path,
+        "child_labels": child_labels,
+        "total_documents": len(node_sha256s),
+        "filtered_documents": len(filtered_sha256s),
+        "require_digital": require_digital,
+        "require_toc": require_toc,
+        "offset": offset,
+        "limit": limit,
+        "max_concurrency": max_concurrency,
+        "force": force,
+        "skipped_existing": len(skipped_existing_sha256s),
+        "persisted": persisted,
+        "failed": failed,
+        "results": results,
+    }
+
+
 def _persist_partition_children(
     sqlite_db_path: Path,
     *,
@@ -759,6 +1205,112 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
             "generalizing. Defaults to all remaining batches in the node."
         ),
     )
+    assign_probe_parser = subparsers.add_parser(
+        "probe-taxonomy-assign",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help="Probe document-to-child assignment under one taxonomy node without persisting.",
+    )
+    assign_probe_parser.add_argument(
+        "--node-path",
+        required=True,
+        help="Taxonomy node path whose existing children will be used as assignment labels.",
+    )
+    assign_probe_parser.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Maximum number of node documents to probe in stable order.",
+    )
+    assign_probe_parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="Start offset into the node's current document memberships.",
+    )
+    assign_probe_parser.add_argument(
+        "--require-digital",
+        action="store_true",
+        help="Only run on documents marked as digital.",
+    )
+    assign_probe_parser.add_argument(
+        "--require-toc",
+        action="store_true",
+        help="Only run on documents that have ToC entries.",
+    )
+    assign_run_parser = subparsers.add_parser(
+        "run-taxonomy-assign",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help="Run document-to-child assignment under one taxonomy node and persist pending rows.",
+    )
+    assign_run_parser.add_argument(
+        "--node-path",
+        required=True,
+        help="Taxonomy node path whose existing children will be used as assignment labels.",
+    )
+    assign_run_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optional maximum number of node documents to process from the start offset.",
+    )
+    assign_run_parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="Start offset into the node's current document memberships.",
+    )
+    assign_run_parser.add_argument(
+        "--max-concurrency",
+        type=int,
+        default=1,
+        help="Maximum number of concurrent LLM requests for assignment.",
+    )
+    assign_run_parser.add_argument(
+        "--require-digital",
+        action="store_true",
+        help="Only run on documents marked as digital.",
+    )
+    assign_run_parser.add_argument(
+        "--require-toc",
+        action="store_true",
+        help="Only run on documents that have ToC entries.",
+    )
+    assign_run_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-request and overwrite existing assignment rows for the selected documents.",
+    )
+    assign_run_parser.add_argument(
+        "--output-ndjson",
+        type=Path,
+        default=None,
+        help="Append one JSON record per assignment result as it completes.",
+    )
+    show_assignments_parser = subparsers.add_parser(
+        "show-taxonomy-assignments",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help="Display readable taxonomy assignment rows for one taxonomy node.",
+    )
+    show_assignments_parser.add_argument(
+        "--node-path",
+        required=True,
+        help="Taxonomy node path whose assignment rows will be displayed.",
+    )
+    show_assignments_parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Maximum number of assignment rows to display.",
+    )
+    show_assignments_parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="Start offset into the node's assignment rows.",
+    )
     subparsers.add_parser(
         "bootstrap-taxonomy-root",
         parents=[_base_parser(default_config)],
@@ -860,6 +1412,43 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
                 child_names=child_names,
             )
         _emit_json(payload)
+        return 0
+    if args.command == "probe-taxonomy-assign":
+        _emit_json(
+            _probe_taxonomy_assignments(
+                config,
+                node_path=args.node_path,
+                limit=args.limit,
+                offset=args.offset,
+                require_digital=args.require_digital,
+                require_toc=args.require_toc,
+            )
+        )
+        return 0
+    if args.command == "run-taxonomy-assign":
+        _emit_json(
+            _run_taxonomy_assignments(
+                config,
+                node_path=args.node_path,
+                limit=args.limit,
+                offset=args.offset,
+                max_concurrency=args.max_concurrency,
+                require_digital=args.require_digital,
+                require_toc=args.require_toc,
+                force=args.force,
+                output_ndjson=args.output_ndjson,
+            )
+        )
+        return 0
+    if args.command == "show-taxonomy-assignments":
+        _emit_text(
+            _show_taxonomy_assignments(
+                config.sqlite3_db_path,
+                node_path=args.node_path,
+                limit=args.limit,
+                offset=args.offset,
+            )
+        )
         return 0
     if args.command == "probe-taxonomy-partition":
         batches = _partition_batches(config, chunk_size=args.chunk_size)

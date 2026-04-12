@@ -96,9 +96,16 @@ Notes:
   - run the experimental taxonomy-partition prompt against one or more shuffled batches
 - `probe-taxonomy-partition-generalize`
   - run the full probe flow through final generalization
+- `probe-taxonomy-assign`
+  - probe one-by-one document assignment under an existing taxonomy node
 - `run-taxonomy-partition`
   - run taxonomy partitioning on one node path such as `Root` or `Root/Physics`
   - bootstraps `Root` on first use, then persists child nodes on later runs
+- `run-taxonomy-assign`
+  - run one-by-one document assignment under an existing taxonomy node
+  - persists `pending` `taxonomy_assignments` rows
+- `show-taxonomy-assignments`
+  - display readable joined assignment rows for one taxonomy node
 - `suggest-llm`
   - run document suggestion over a filtered batch and persist results
 - `suggest-toc-review`
@@ -156,6 +163,15 @@ Notes:
   - `--output-ndjson`
 - batch NDJSON output is appended during the run as each request completes; it is not buffered until the whole batch finishes
 - keep `--max-concurrency` low at first; `2` or `4` is a practical starting point if you are near API rate limits
+- taxonomy assignment commands also support:
+  - `--require-digital`
+  - `--require-toc`
+  - `--limit`
+  - `--offset`
+- `run-taxonomy-assign` also supports:
+  - `--force`
+  - `--max-concurrency`
+  - `--output-ndjson`
 
 Example with explicit args:
 
@@ -223,7 +239,25 @@ Run taxonomy partitioning on the root node:
 pdfzx/.venv/bin/python client.py run-taxonomy-partition --node-path Root --chunk-size 500 --batch-index 0 --batch-count 7
 ```
 
-`--output-ndjson` writes one JSON line per candidate document, including:
+Probe taxonomy assignment under the root node:
+
+```bash
+pdfzx/.venv/bin/python client.py probe-taxonomy-assign --node-path Root --limit 10 --offset 0
+```
+
+Run taxonomy assignment over filtered documents under the root node:
+
+```bash
+pdfzx/.venv/bin/python client.py run-taxonomy-assign --node-path Root --require-digital --require-toc --limit 100 --offset 0 --max-concurrency 5
+```
+
+Show readable taxonomy assignment rows:
+
+```bash
+pdfzx/.venv/bin/python client.py show-taxonomy-assignments --node-path Root --limit 50 --offset 0
+```
+
+For taxonomy assignment, `--output-ndjson` writes one JSON line per item as it completes, including:
 
 - `workflow`
 - `sha256`
