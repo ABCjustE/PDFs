@@ -5,6 +5,7 @@ from datetime import UTC
 from datetime import datetime
 
 from sqlalchemy import delete
+from sqlalchemy import func
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import selectinload
@@ -25,6 +26,24 @@ class TaxonomyAssignmentView:
     confidence: str | None
     status: str
     reasoning_summary: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class TaxonomyNodeStat:
+    """Readable direct membership count for one taxonomy node."""
+
+    node_path: str
+    depth: int
+    document_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class TaxonomyNodeDocumentView:
+    """Readable document membership row for one taxonomy node."""
+
+    node_path: str
+    sha256: str
+    document_path: str | None
 
 
 class TaxonomyTreeRepository:
@@ -280,6 +299,65 @@ class TaxonomyTreeRepository:
                     confidence=assignment.confidence,
                     status=assignment.status,
                     reasoning_summary=assignment.reasoning_summary,
+                )
+            )
+        return rows
+
+    def list_node_stats(
+        self,
+        *,
+        depth: int | None = None,
+    ) -> list[TaxonomyNodeStat]:
+        """Return direct membership counts grouped by taxonomy node."""
+        stmt = (
+            select(
+                TaxonomyNode.path,
+                TaxonomyNode.depth,
+                func.count(TaxonomyNodeDocument.sha256),
+            )
+            .outerjoin(TaxonomyNodeDocument, TaxonomyNode.id == TaxonomyNodeDocument.node_id)
+            .group_by(TaxonomyNode.id, TaxonomyNode.path, TaxonomyNode.depth)
+            .order_by(func.count(TaxonomyNodeDocument.sha256).desc(), TaxonomyNode.path.asc())
+        )
+        if depth is not None:
+            stmt = stmt.where(TaxonomyNode.depth == depth)
+        return [
+            TaxonomyNodeStat(
+                node_path=node_path,
+                depth=node_depth,
+                document_count=document_count,
+            )
+            for node_path, node_depth, document_count in self._session.execute(stmt)
+        ]
+
+    def list_node_document_views(
+        self,
+        *,
+        node_id: int,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[TaxonomyNodeDocumentView]:
+        """Return readable document membership rows for one taxonomy node."""
+        stmt = (
+            select(TaxonomyNodeDocument)
+            .options(
+                selectinload(TaxonomyNodeDocument.node),
+                selectinload(TaxonomyNodeDocument.document).selectinload(Document.paths),
+            )
+            .where(TaxonomyNodeDocument.node_id == node_id)
+            .order_by(TaxonomyNodeDocument.sha256.asc())
+            .offset(offset)
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        rows = []
+        for membership in self._session.scalars(stmt):
+            document_paths = sorted(path.rel_path for path in membership.document.paths)
+            rows.append(
+                TaxonomyNodeDocumentView(
+                    node_path=membership.node.path,
+                    sha256=membership.sha256,
+                    document_path=document_paths[0] if document_paths else None,
                 )
             )
         return rows

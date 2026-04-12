@@ -288,6 +288,70 @@ def _apply_taxonomy_assignments(
     }
 
 
+def _show_taxonomy_node_stats(sqlite_db_path: Path, *, depth: int | None) -> str:
+    engine = create_sqlite_engine(sqlite_db_path)
+    try:
+        with Session(engine) as session:
+            repo = TaxonomyTreeRepository(session)
+            stats = repo.list_node_stats(depth=depth)
+    finally:
+        engine.dispose()
+    if not stats:
+        return "No taxonomy node stats found."
+    rows = [
+        {
+            "node_path": row.node_path,
+            "depth": str(row.depth),
+            "document_count": str(row.document_count),
+        }
+        for row in stats
+    ]
+    return _render_table(
+        rows,
+        columns=[
+            ("node_path", "node", 18),
+            ("depth", "depth", 5),
+            ("document_count", "documents", 9),
+        ],
+    )
+
+
+def _show_taxonomy_node_documents(
+    sqlite_db_path: Path,
+    *,
+    node_path: str,
+    limit: int | None,
+    offset: int,
+) -> str:
+    engine = create_sqlite_engine(sqlite_db_path)
+    try:
+        with Session(engine) as session:
+            repo = TaxonomyTreeRepository(session)
+            node = repo.get_node_by_path(path=node_path)
+            if node is None:
+                msg = f"Taxonomy node not found: {node_path}"
+                raise ValueError(msg)
+            rows = repo.list_node_document_views(node_id=node.id, limit=limit, offset=offset)
+    finally:
+        engine.dispose()
+    if not rows:
+        return f"No taxonomy node documents found for node: {node_path}"
+    table_rows = [
+        {
+            "node_path": row.node_path,
+            "document_path": (row.document_path or "").replace("\n", " ").strip(),
+        }
+        for row in rows
+    ]
+    return _render_table(
+        table_rows,
+        columns=[
+            ("node_path", "node", 18),
+            ("document_path", "document", 48),
+        ],
+    )
+
+
 def _export_review_json(*, sqlite_db_path: Path, output_path: Path):
     if export_review_json is None:
         msg = "export-review-json is unavailable because pdfzx.review is not installed"
@@ -1365,6 +1429,41 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
         default=[],
         help="Skip applying assignments for documents whose current path contains this keyword.",
     )
+    node_stats_parser = subparsers.add_parser(
+        "show-taxonomy-node-stats",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help="Display direct document counts grouped by taxonomy node.",
+    )
+    node_stats_parser.add_argument(
+        "--depth",
+        type=int,
+        default=None,
+        help="Optional taxonomy depth to filter on.",
+    )
+    node_documents_parser = subparsers.add_parser(
+        "show-taxonomy-node-documents",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help="Display one taxonomy node's document memberships with readable paths.",
+    )
+    node_documents_parser.add_argument(
+        "--node-path",
+        required=True,
+        help="Taxonomy node path whose current document memberships will be displayed.",
+    )
+    node_documents_parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Maximum number of node document rows to display.",
+    )
+    node_documents_parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="Start offset into the node's current document memberships.",
+    )
     subparsers.add_parser(
         "bootstrap-taxonomy-root",
         parents=[_base_parser(default_config)],
@@ -1511,6 +1610,19 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
                 node_path=args.node_path,
                 minimum_confidence=args.minimum_confidence,
                 exclude_path_keywords=args.exclude_path_keyword,
+            )
+        )
+        return 0
+    if args.command == "show-taxonomy-node-stats":
+        _emit_text(_show_taxonomy_node_stats(config.sqlite3_db_path, depth=args.depth))
+        return 0
+    if args.command == "show-taxonomy-node-documents":
+        _emit_text(
+            _show_taxonomy_node_documents(
+                config.sqlite3_db_path,
+                node_path=args.node_path,
+                limit=args.limit,
+                offset=args.offset,
             )
         )
         return 0

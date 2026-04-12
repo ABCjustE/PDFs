@@ -375,3 +375,95 @@ def test_taxonomy_tree_repository_applies_with_path_keyword_exclusions(tmp_path)
             session.commit()
     finally:
         engine.dispose()
+
+
+def test_taxonomy_tree_repository_lists_node_stats(tmp_path) -> None:
+    db_path = tmp_path / "db.sqlite3"
+    init_sqlite_db(db_path)
+    engine = create_sqlite_engine(db_path)
+    try:
+        with Session(engine) as session:
+            session.add_all(
+                [
+                    Document(
+                        sha256="a",
+                        md5="a" * 32,
+                        file_name="a.pdf",
+                        metadata_extra_json={},
+                        languages_json=[],
+                        is_digital=True,
+                        force_extracted=False,
+                    ),
+                    Document(
+                        sha256="b",
+                        md5="b" * 32,
+                        file_name="b.pdf",
+                        metadata_extra_json={},
+                        languages_json=[],
+                        is_digital=True,
+                        force_extracted=False,
+                    ),
+                ]
+            )
+            repo = TaxonomyTreeRepository(session)
+            root = repo.ensure_root_node()
+            physics = repo.ensure_child_node(
+                parent_id=root.id,
+                parent_path=root.path,
+                name="Physics",
+            )
+            repo.ensure_child_node(
+                parent_id=root.id,
+                parent_path=root.path,
+                name="Mathematics",
+            )
+            repo.add_documents(node_id=root.id, sha256s=["a", "b"])
+            repo.add_documents(node_id=physics.id, sha256s=["a"])
+            stats = repo.list_node_stats()
+            assert stats[0].node_path == "Root"
+            assert stats[0].document_count == 2
+            assert stats[1].node_path == "Root/Physics"
+            assert stats[1].document_count == 1
+            assert stats[2].node_path == "Root/Mathematics"
+            assert stats[2].document_count == 0
+            depth_one = repo.list_node_stats(depth=1)
+            assert [row.node_path for row in depth_one] == ["Root/Physics", "Root/Mathematics"]
+            session.commit()
+    finally:
+        engine.dispose()
+
+
+def test_taxonomy_tree_repository_lists_node_document_views(tmp_path) -> None:
+    db_path = tmp_path / "db.sqlite3"
+    init_sqlite_db(db_path)
+    engine = create_sqlite_engine(db_path)
+    try:
+        with Session(engine) as session:
+            session.add(
+                Document(
+                    sha256="a",
+                    md5="a" * 32,
+                    file_name="a.pdf",
+                    metadata_extra_json={},
+                    languages_json=[],
+                    is_digital=True,
+                    force_extracted=False,
+                )
+            )
+            session.add(DocumentPath(sha256="a", rel_path="Books/Physics/a.pdf"))
+            repo = TaxonomyTreeRepository(session)
+            root = repo.ensure_root_node()
+            physics = repo.ensure_child_node(
+                parent_id=root.id,
+                parent_path=root.path,
+                name="Physics",
+            )
+            repo.add_documents(node_id=physics.id, sha256s=["a"])
+            rows = repo.list_node_document_views(node_id=physics.id)
+            assert len(rows) == 1
+            assert rows[0].node_path == "Root/Physics"
+            assert rows[0].sha256 == "a"
+            assert rows[0].document_path == "Books/Physics/a.pdf"
+            session.commit()
+    finally:
+        engine.dispose()

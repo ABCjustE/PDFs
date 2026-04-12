@@ -108,6 +108,10 @@ Notes:
   - display readable joined assignment rows for one taxonomy node
 - `apply-taxonomy-assignments`
   - apply pending high-confidence assignment rows into child node memberships
+- `show-taxonomy-node-stats`
+  - display direct document counts grouped by taxonomy node
+- `show-taxonomy-node-documents`
+  - display one taxonomy node's current document memberships with readable document paths
 - `suggest-llm`
   - run document suggestion over a filtered batch and persist results
 - `suggest-toc-review`
@@ -263,6 +267,18 @@ Apply pending high-confidence assignments while excluding manual path buckets:
 
 ```bash
 pdfzx/.venv/bin/python client.py apply-taxonomy-assignments --node-path Root --minimum-confidence high --exclude-path-keyword HKUSTthings --exclude-path-keyword ait38 --exclude-path-keyword ff48
+```
+
+Show direct document counts grouped by taxonomy node:
+
+```bash
+pdfzx/.venv/bin/python client.py show-taxonomy-node-stats --depth 1
+```
+
+Show one node's current document memberships with readable paths:
+
+```bash
+pdfzx/.venv/bin/python client.py show-taxonomy-node-documents --node-path Root/Physics --limit 50 --offset 0
 ```
 
 For taxonomy assignment, `--output-ndjson` writes one JSON line per item as it completes, including:
