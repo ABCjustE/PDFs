@@ -131,14 +131,10 @@ def test_taxonomy_tree_repository_ensures_child_node(tmp_path) -> None:
             repo = TaxonomyTreeRepository(session)
             root = repo.ensure_root_node()
             physics = repo.ensure_child_node(
-                parent_id=root.id,
-                parent_path=root.path,
-                name="Physics",
+                parent_id=root.id, parent_path=root.path, name="Physics"
             )
             same_physics = repo.ensure_child_node(
-                parent_id=root.id,
-                parent_path=root.path,
-                name="Physics",
+                parent_id=root.id, parent_path=root.path, name="Physics"
             )
             assert physics.id == same_physics.id
             assert physics.path == "Root/Physics"
@@ -157,14 +153,15 @@ def test_taxonomy_tree_repository_replaces_topic_terms(tmp_path) -> None:
             repo = TaxonomyTreeRepository(session)
             root = repo.ensure_root_node()
             physics = repo.ensure_child_node(
-                parent_id=root.id,
-                parent_path=root.path,
-                name="Physics",
+                parent_id=root.id, parent_path=root.path, name="Physics"
             )
-            assert repo.replace_topic_terms(
-                node_id=physics.id,
-                terms=["Quantum Mechanics", " Electromagnetism ", "Quantum Mechanics", ""],
-            ) == 2
+            assert (
+                repo.replace_topic_terms(
+                    node_id=physics.id,
+                    terms=["Quantum Mechanics", " Electromagnetism ", "Quantum Mechanics", ""],
+                )
+                == 2
+            )
             assert repo.list_topic_terms(node_id=physics.id) == [
                 "Electromagnetism",
                 "Quantum Mechanics",
@@ -196,14 +193,10 @@ def test_taxonomy_tree_repository_replaces_child_subtree(tmp_path) -> None:
             repo = TaxonomyTreeRepository(session)
             root = repo.ensure_root_node()
             physics = repo.ensure_child_node(
-                parent_id=root.id,
-                parent_path=root.path,
-                name="Physics",
+                parent_id=root.id, parent_path=root.path, name="Physics"
             )
             quantum = repo.ensure_child_node(
-                parent_id=physics.id,
-                parent_path=physics.path,
-                name="Quantum Mechanics",
+                parent_id=physics.id, parent_path=physics.path, name="Quantum Mechanics"
             )
             repo.add_documents(node_id=quantum.id, sha256s=["a"])
             repo.upsert_assignment(
@@ -256,9 +249,7 @@ def test_taxonomy_tree_repository_applies_high_confidence_assignments(tmp_path) 
             repo = TaxonomyTreeRepository(session)
             root = repo.ensure_root_node()
             physics = repo.ensure_child_node(
-                parent_id=root.id,
-                parent_path=root.path,
-                name="Physics",
+                parent_id=root.id, parent_path=root.path, name="Physics"
             )
             repo.add_documents(node_id=root.id, sha256s=["a", "b"])
             repo.upsert_assignment(
@@ -310,9 +301,7 @@ def test_taxonomy_tree_repository_lists_assignment_views(tmp_path) -> None:
             repo = TaxonomyTreeRepository(session)
             root = repo.ensure_root_node()
             physics = repo.ensure_child_node(
-                parent_id=root.id,
-                parent_path=root.path,
-                name="Physics",
+                parent_id=root.id, parent_path=root.path, name="Physics"
             )
             repo.add_documents(node_id=root.id, sha256s=["a", "b"])
             repo.upsert_assignment(
@@ -370,15 +359,13 @@ def test_taxonomy_tree_repository_applies_with_path_keyword_exclusions(tmp_path)
             session.add_all(
                 [
                     DocumentPath(sha256="a", rel_path="Books/Physics/a.pdf"),
-                    DocumentPath(sha256="b", rel_path="HKUSTthings/Physics/b.pdf"),
+                    DocumentPath(sha256="b", rel_path="archive/physics/b.pdf"),
                 ]
             )
             repo = TaxonomyTreeRepository(session)
             root = repo.ensure_root_node()
             physics = repo.ensure_child_node(
-                parent_id=root.id,
-                parent_path=root.path,
-                name="Physics",
+                parent_id=root.id, parent_path=root.path, name="Physics"
             )
             repo.add_documents(node_id=root.id, sha256s=["a", "b"])
             repo.upsert_assignment(
@@ -398,9 +385,7 @@ def test_taxonomy_tree_repository_applies_with_path_keyword_exclusions(tmp_path)
                 status="pending",
             )
             summary = repo.apply_assignments(
-                node_id=root.id,
-                minimum_confidence="high",
-                exclude_path_keywords=["hkustthings"],
+                node_id=root.id, minimum_confidence="high", exclude_path_keywords=["archive"]
             )
             assert summary == {"applied": 1, "skipped": 0, "excluded": 1}
             assert repo.list_document_sha256s(node_id=physics.id) == ["a"]
@@ -444,15 +429,9 @@ def test_taxonomy_tree_repository_lists_node_stats(tmp_path) -> None:
             repo = TaxonomyTreeRepository(session)
             root = repo.ensure_root_node()
             physics = repo.ensure_child_node(
-                parent_id=root.id,
-                parent_path=root.path,
-                name="Physics",
+                parent_id=root.id, parent_path=root.path, name="Physics"
             )
-            repo.ensure_child_node(
-                parent_id=root.id,
-                parent_path=root.path,
-                name="Mathematics",
-            )
+            repo.ensure_child_node(parent_id=root.id, parent_path=root.path, name="Mathematics")
             repo.add_documents(node_id=root.id, sha256s=["a", "b"])
             repo.add_documents(node_id=physics.id, sha256s=["a"])
             stats = repo.list_node_stats()
@@ -490,9 +469,7 @@ def test_taxonomy_tree_repository_lists_node_document_views(tmp_path) -> None:
             repo = TaxonomyTreeRepository(session)
             root = repo.ensure_root_node()
             physics = repo.ensure_child_node(
-                parent_id=root.id,
-                parent_path=root.path,
-                name="Physics",
+                parent_id=root.id, parent_path=root.path, name="Physics"
             )
             repo.add_documents(node_id=physics.id, sha256s=["a"])
             rows = repo.list_node_document_views(node_id=physics.id)
@@ -514,13 +491,10 @@ def test_taxonomy_tree_repository_lists_topic_terms(tmp_path) -> None:
             repo = TaxonomyTreeRepository(session)
             root = repo.ensure_root_node()
             physics = repo.ensure_child_node(
-                parent_id=root.id,
-                parent_path=root.path,
-                name="Physics",
+                parent_id=root.id, parent_path=root.path, name="Physics"
             )
             repo.replace_topic_terms(
-                node_id=physics.id,
-                terms=["Quantum Mechanics", "Electromagnetism"],
+                node_id=physics.id, terms=["Quantum Mechanics", "Electromagnetism"]
             )
             assert repo.list_topic_terms(node_id=physics.id) == [
                 "Electromagnetism",
@@ -540,14 +514,10 @@ def test_taxonomy_tree_repository_lists_node_term_views(tmp_path) -> None:
             repo = TaxonomyTreeRepository(session)
             root = repo.ensure_root_node()
             physics = repo.ensure_child_node(
-                parent_id=root.id,
-                parent_path=root.path,
-                name="Physics",
+                parent_id=root.id, parent_path=root.path, name="Physics"
             )
             mathematics = repo.ensure_child_node(
-                parent_id=root.id,
-                parent_path=root.path,
-                name="Mathematics",
+                parent_id=root.id, parent_path=root.path, name="Mathematics"
             )
             repo.replace_topic_terms(node_id=physics.id, terms=["Quantum Mechanics"])
             repo.replace_topic_terms(node_id=mathematics.id, terms=["Linear Algebra"])

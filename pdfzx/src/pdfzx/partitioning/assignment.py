@@ -69,10 +69,8 @@ def assign_taxonomy_child(  # noqa: PLR0913
     if parsed is None:
         msg = "LLM response did not contain a parsed taxonomy assignment payload"
         raise ValueError(msg)
-    if (
-        parsed.assignment_action == "child"
-        and parsed.assigned_child not in prompt_input.child_labels
-    ):
+    child_labels = {option.label for option in prompt_input.child_options}
+    if parsed.assignment_action == "child" and parsed.assigned_child not in child_labels:
         msg = f"LLM returned unknown child label: {parsed.assigned_child}"
         raise ValueError(msg)
     if parsed.assignment_action == "stay" and parsed.assigned_child is not None:

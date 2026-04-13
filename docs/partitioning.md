@@ -27,7 +27,7 @@ Current persistence status:
 - `run-taxonomy-partition` persists child nodes
 - `run-taxonomy-assign` persists assignment rows
 - `apply-taxonomy-assignments` mutates `taxonomy_node_documents`
-- `taxonomy_node_topic_terms` exists in schema, but is not populated by the workflow yet
+- `taxonomy_node_topic_terms` is populated from partition generalization output and used in assignment prompts
 
 ## Partition Mechanism
 
@@ -99,10 +99,10 @@ Shared partition flags:
 - `--category-limit`
 - repeated `--exclude-path-keyword`
 
-Path-keyword exclusions are applied before batching. Example:
+Path-keyword exclusions are applied before batching. `PDFZX_TAXONOMY_EXCLUDE_PATH_KEYWORDS` provides a soft default list, and repeated CLI flags override that default list for the current command. Example:
 
 ```bash
-python client.py probe-taxonomy-partition --node-path Root --exclude-path-keyword HKUSTthings --exclude-path-keyword HKOI --exclude-path-keyword ait38 --exclude-path-keyword ff48
+python client.py probe-taxonomy-partition --node-path Root --exclude-path-keyword lectures --exclude-path-keyword archive --exclude-path-keyword inbox --exclude-path-keyword misc
 ```
 
 `run-taxonomy-partition` behavior:
@@ -116,13 +116,13 @@ python client.py probe-taxonomy-partition --node-path Root --exclude-path-keywor
 Probe assignment decisions without writing:
 
 ```bash
-python client.py probe-taxonomy-assign --node-path Root --limit 10 --offset 0
+python client.py probe-taxonomy-assign --node-path Root --limit 10 --offset 0 --exclude-path-keyword lectures --exclude-path-keyword archive
 ```
 
 Persist pending assignment rows:
 
 ```bash
-python client.py run-taxonomy-assign --node-path Root --require-digital --require-toc --limit 100 --offset 0 --max-concurrency 5
+python client.py run-taxonomy-assign --node-path Root --require-digital --require-toc --limit 100 --offset 0 --max-concurrency 5 --exclude-path-keyword lectures --exclude-path-keyword archive
 ```
 
 Inspect readable assignment rows:
@@ -134,17 +134,21 @@ python client.py show-taxonomy-assignments --node-path Root --status pending --l
 Apply high-confidence assignments:
 
 ```bash
-python client.py apply-taxonomy-assignments --node-path Root --minimum-confidence high --exclude-path-keyword HKUSTthings --exclude-path-keyword ait38 --exclude-path-keyword ff48
+python client.py apply-taxonomy-assignments --node-path Root --minimum-confidence high --exclude-path-keyword lectures --exclude-path-keyword archive --exclude-path-keyword inbox --exclude-path-keyword misc
 ```
 
 Assignment behavior:
 
 - assignment uses the node's existing child labels as allowed child targets
+- assignment also includes child topic terms to clarify similar child labels
 - the prompt may also decide a document should stay at the current node
-- `run-taxonomy-assign` writes `taxonomy_assignments` with `status="pending"`
+- `run-taxonomy-assign` writes `taxonomy_assignments` with `status="pending"` only for `child` decisions
+- `stay` decisions are returned in probe/run output but are not persisted as assignment rows
 - `--force` re-requests and overwrites existing assignment rows
 - existing rows are skipped by default
 - `--output-ndjson` writes durable per-item progress
+- repeated `--exclude-path-keyword` values are applied before probing or assignment runs
+- `PDFZX_TAXONOMY_EXCLUDE_PATH_KEYWORDS` provides the default shared exclude list for partition, assignment, and apply workflows unless CLI exclusions are passed
 
 Apply behavior:
 
@@ -152,6 +156,17 @@ Apply behavior:
 - applied documents move from the parent node membership to the assigned child node membership
 - assignment status changes from `pending` to `applied`
 - excluded path keywords are skipped and left untouched
+
+Shared exclusion behavior:
+
+- `probe-taxonomy-partition`
+- `probe-taxonomy-partition-generalize`
+- `run-taxonomy-partition`
+- `probe-taxonomy-assign`
+- `run-taxonomy-assign`
+- `apply-taxonomy-assignments`
+- all of these commands accept repeated `--exclude-path-keyword`
+- if no CLI exclusions are passed, they fall back to `PDFZX_TAXONOMY_EXCLUDE_PATH_KEYWORDS`
 
 ## Inspection Commands
 
@@ -173,7 +188,7 @@ Example for one node:
 
 ```bash
 python client.py run-taxonomy-partition --node-path 'Root/Computer Science'
-python client.py run-taxonomy-assign --node-path 'Root/Computer Science' --limit 100 --offset 0 --max-concurrency 5
+python client.py run-taxonomy-assign --node-path 'Root/Computer Science' --limit 100 --offset 0 --max-concurrency 5 --exclude-path-keyword lectures --exclude-path-keyword archive
 python client.py show-taxonomy-assignments --node-path 'Root/Computer Science' --status pending --limit 50 --offset 0
 python client.py apply-taxonomy-assignments --node-path 'Root/Computer Science' --minimum-confidence high
 python client.py show-taxonomy-node-stats --depth 2

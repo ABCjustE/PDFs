@@ -179,9 +179,7 @@ def test_get_config_reads_llm_max_toc_entries(
     assert config.llm_max_toc_entries == 12
 
 
-def test_get_config_reads_partition_seed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_get_config_reads_partition_seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PDFZX_PDF_ROOT", str(tmp_path))
     monkeypatch.setenv("PDFZX_JSON_DB", str(tmp_path / "db.json"))
     monkeypatch.setenv("PDFZX_PARTITION_SEED", "seed-42")
@@ -201,3 +199,15 @@ def test_get_config_reads_partition_chunk_size(
     config = get_config()
 
     assert config.partition_chunk_size == 25
+
+
+def test_get_config_reads_taxonomy_exclude_path_keywords(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PDFZX_PDF_ROOT", str(tmp_path))
+    monkeypatch.setenv("PDFZX_JSON_DB", str(tmp_path / "db.json"))
+    monkeypatch.setenv("PDFZX_TAXONOMY_EXCLUDE_PATH_KEYWORDS", " archive, private , ,notes ")
+
+    config = get_config()
+
+    assert config.taxonomy_exclude_path_keywords == ["archive", "private", "notes"]

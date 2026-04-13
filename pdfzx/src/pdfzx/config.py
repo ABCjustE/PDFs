@@ -13,6 +13,13 @@ DEFAULT_PARTITION_SEED = "pdfzx-partition-v1"
 DEFAULT_PARTITION_CHUNK_SIZE = 50
 
 
+def _parse_env_keyword_list(raw: str | None) -> list[str]:
+    """Parse a comma-separated environment variable into normalized keywords."""
+    if raw is None:
+        return []
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 class ScanConfig(BaseModel):
     """Validated runtime configuration for a scan."""
 
@@ -30,6 +37,7 @@ class ScanConfig(BaseModel):
     llm_max_toc_entries: int = DEFAULT_LLM_MAX_TOC_ENTRIES
     partition_seed: str = DEFAULT_PARTITION_SEED
     partition_chunk_size: int = DEFAULT_PARTITION_CHUNK_SIZE
+    taxonomy_exclude_path_keywords: list[str] = []
 
     @field_validator("root_path")
     @classmethod
@@ -105,16 +113,14 @@ def get_config() -> ScanConfig:
     openai_model = os.environ.get("PDFZX_OPENAI_MODEL", "gpt-4o-mini")
     sqlite3_db_path = os.environ.get("PDFZX_SQLITE3_DB_PATH", "./db.sqlite3")
     llm_max_toc_entries = int(
-        os.environ.get(
-            "PDFZX_LLM_MAX_TOC_ENTRIES", str(DEFAULT_LLM_MAX_TOC_ENTRIES)
-        )
+        os.environ.get("PDFZX_LLM_MAX_TOC_ENTRIES", str(DEFAULT_LLM_MAX_TOC_ENTRIES))
     )
     partition_seed = os.environ.get("PDFZX_PARTITION_SEED", DEFAULT_PARTITION_SEED)
     partition_chunk_size = int(
-        os.environ.get(
-            "PDFZX_PARTITION_CHUNK_SIZE",
-            str(DEFAULT_PARTITION_CHUNK_SIZE),
-        )
+        os.environ.get("PDFZX_PARTITION_CHUNK_SIZE", str(DEFAULT_PARTITION_CHUNK_SIZE))
+    )
+    taxonomy_exclude_path_keywords = _parse_env_keyword_list(
+        os.environ.get("PDFZX_TAXONOMY_EXCLUDE_PATH_KEYWORDS")
     )
     return ScanConfig(
         root_path=Path(root),
@@ -129,4 +135,5 @@ def get_config() -> ScanConfig:
         llm_max_toc_entries=llm_max_toc_entries,
         partition_seed=partition_seed,
         partition_chunk_size=partition_chunk_size,
+        taxonomy_exclude_path_keywords=taxonomy_exclude_path_keywords,
     )

@@ -14,12 +14,13 @@ from pdfzx.models import DocumentRecord
 from pdfzx.prompts._shared import build_system_prompt
 
 TAXONOMY_ASSIGNMENT_WORKFLOW = "taxonomy_assignment"
-TAXONOMY_ASSIGNMENT_PROMPT_VERSION = "v4"
+TAXONOMY_ASSIGNMENT_PROMPT_VERSION = "v5"
 
 TAXONOMY_ASSIGNMENT_SYSTEM_PROMPT = build_system_prompt(
     role="You are assigning one document to one existing child taxonomy label.",
     input_scope=(
-        "a parent taxonomy node, its existing child labels, and one compact document summary"
+        "a parent taxonomy node, its existing child labels with topic terms, "
+        "and one compact document summary"
     ),
     goals=[
         "either assign the document to one existing child label or keep it in the current node",
@@ -27,7 +28,8 @@ TAXONOMY_ASSIGNMENT_SYSTEM_PROMPT = build_system_prompt(
         "prefer the document's apparent topic over literal keywords in the title",
     ],
     evidence_priority=[
-        "current path hints",
+        "current document paths",
+        "child topic terms",
         "metadata title",
         "document file name and normalised name",
     ],
@@ -35,15 +37,17 @@ TAXONOMY_ASSIGNMENT_SYSTEM_PROMPT = build_system_prompt(
         "return `assignment_action` as either `child` or `stay`",
         (
             "if `assignment_action` is `child`, return exactly one `assigned_child` "
-            "chosen from `child_labels`"
+            "chosen from `child_options[].label`"
         ),
         "if `assignment_action` is `stay`, return `assigned_child` as null",
         "do not invent a new label",
-        "treat the existing current_path as a strong prior for the document's topical area",
+        "treat the current document paths as a strong prior for the document's topical area",
         (
-            "do not assign by filename keyword alone when current_path or metadata_title "
+            "do not assign by filename keyword alone when the current document "
+            "paths or metadata_title "
             "indicates a different subject"
         ),
+        "use child topic terms to disambiguate similar child labels",
         "prefer broad current-layer labels over implied deeper subtopics",
         "prefer `stay` over forcing a weak child assignment",
         "set `confidence` to one of: high, medium, low",
@@ -59,15 +63,22 @@ class TaxonomyAssignmentDocumentSummary(BaseModel):
     sha256: str
     file_name: str
     normalised_name: str | None = None
-    current_path: str | None = None
+    current_paths: list[str] = Field(default_factory=list)
     metadata_title: str | None = None
+
+
+class TaxonomyAssignmentChildOption(BaseModel):
+    """One allowed child label with narrower topic hints."""
+
+    label: str
+    topic_terms: list[str] = Field(default_factory=list)
 
 
 class TaxonomyAssignmentPromptInput(BaseModel):
     """Prompt input for assigning one document under one parent node."""
 
     node_path: str
-    child_labels: list[str] = Field(default_factory=list)
+    child_options: list[TaxonomyAssignmentChildOption] = Field(default_factory=list)
     document: TaxonomyAssignmentDocumentSummary
 
 
@@ -81,29 +92,23 @@ class TaxonomyAssignmentResponse(BaseModel):
 
 
 def build_taxonomy_assignment_prompt_input(
-    *,
-    node_path: str,
-    child_labels: list[str],
-    record: DocumentRecord,
+    *, node_path: str, child_options: list[TaxonomyAssignmentChildOption], record: DocumentRecord
 ) -> TaxonomyAssignmentPromptInput:
     """Build the allowed prompt payload for one document assignment."""
-    current_path = record.paths[0] if record.paths else None
     return TaxonomyAssignmentPromptInput(
         node_path=node_path,
-        child_labels=child_labels,
+        child_options=child_options,
         document=TaxonomyAssignmentDocumentSummary(
             sha256=record.sha256,
             file_name=record.file_name,
             normalised_name=record.normalised_name,
-            current_path=current_path,
+            current_paths=sorted(record.paths),
             metadata_title=record.metadata.title,
         ),
     )
 
 
-def build_taxonomy_assignment_user_prompt(
-    prompt_input: TaxonomyAssignmentPromptInput,
-) -> str:
+def build_taxonomy_assignment_user_prompt(prompt_input: TaxonomyAssignmentPromptInput) -> str:
     """Serialize prompt input for the assignment user message."""
     payload = prompt_input.model_dump(mode="json")
     payload["document"].pop("sha256", None)

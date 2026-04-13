@@ -42,6 +42,7 @@ Important env knobs:
 - `PDFZX_OPENAI_MODEL`
 - `PDFZX_LLM_MAX_TOC_ENTRIES`
 - `PDFZX_PARTITION_SEED`
+- `PDFZX_TAXONOMY_EXCLUDE_PATH_KEYWORDS`
 
 ## Schema
 
@@ -95,22 +96,28 @@ Notes:
 - `probe-taxonomy-partition`
   - run the proposal-stage taxonomy partition prompt against one taxonomy node's shuffled batches
   - inspect batch JSON with `categories` and `supporting`
+  - supports repeated `--exclude-path-keyword`
 - `probe-taxonomy-partition-generalize`
   - run the node-scoped proposal plus generalize flow
   - inspect the merged final JSON with `categories` and `supporting`
+  - supports repeated `--exclude-path-keyword`
 - `probe-taxonomy-assign`
   - probe one-by-one document assignment under an existing taxonomy node
+  - supports repeated `--exclude-path-keyword`
 - `run-taxonomy-partition`
   - run taxonomy partitioning on one node path such as `Root` or `Root/Physics`
   - bootstraps `Root` on first use, then persists child nodes on later runs
+  - supports repeated `--exclude-path-keyword`
 - `run-taxonomy-assign`
   - run one-by-one document assignment under an existing taxonomy node
   - persists `pending` `taxonomy_assignments` rows
+  - supports repeated `--exclude-path-keyword`
 - `show-taxonomy-assignments`
   - display readable joined assignment rows for one taxonomy node
   - supports filtering by assignment status
 - `apply-taxonomy-assignments`
   - move pending high-confidence assignment rows from a parent node into child node memberships
+  - supports repeated `--exclude-path-keyword`
 - `show-taxonomy-node-stats`
   - display direct document counts grouped by taxonomy node
 - `show-taxonomy-node-documents`
@@ -162,6 +169,7 @@ Notes:
 - `probe-toc-review` uses the same ToC cap and keeps suggestions separate from canonical document fields
 - `PDFZX_PARTITION_SEED` is the stable seed that future taxonomy-partition batching uses to derive a deterministic document order
 - `PDFZX_PARTITION_CHUNK_SIZE` is the default batch size for taxonomy-partition probing
+- `PDFZX_TAXONOMY_EXCLUDE_PATH_KEYWORDS` is a comma-separated default exclude list shared by taxonomy partition, assignment, and apply workflows
 - taxonomy partitioning command details are documented in [`docs/partitioning.md`](docs/partitioning.md)
 - batch suggestion commands support:
   - `--require-digital`
@@ -172,11 +180,17 @@ Notes:
   - `--output-ndjson`
 - batch NDJSON output is appended during the run as each request completes; it is not buffered until the whole batch finishes
 - keep `--max-concurrency` low at first; `2` or `4` is a practical starting point if you are near API rate limits
+- taxonomy partition commands also support:
+  - repeated `--exclude-path-keyword`
 - taxonomy assignment commands also support:
   - `--require-digital`
   - `--require-toc`
   - `--limit`
   - `--offset`
+  - repeated `--exclude-path-keyword`
+- `apply-taxonomy-assignments` also supports:
+  - repeated `--exclude-path-keyword`
+- taxonomy exclude keywords come from `PDFZX_TAXONOMY_EXCLUDE_PATH_KEYWORDS` by default, and command-line `--exclude-path-keyword` values override that default list for the current command
 - `run-taxonomy-assign` also supports:
   - `--force`
   - `--max-concurrency`
@@ -245,19 +259,19 @@ pdfzx/.venv/bin/python client.py run-taxonomy-partition --node-path Root --chunk
 Exclude manual path buckets during partition probing or runs:
 
 ```bash
-pdfzx/.venv/bin/python client.py probe-taxonomy-partition --node-path Root --exclude-path-keyword HKUSTthings --exclude-path-keyword HKOI --exclude-path-keyword ait38 --exclude-path-keyword ff48
+pdfzx/.venv/bin/python client.py probe-taxonomy-partition --node-path Root --exclude-path-keyword lectures --exclude-path-keyword archive --exclude-path-keyword inbox --exclude-path-keyword misc
 ```
 
 Probe taxonomy assignment under the root node:
 
 ```bash
-pdfzx/.venv/bin/python client.py probe-taxonomy-assign --node-path Root --limit 10 --offset 0
+pdfzx/.venv/bin/python client.py probe-taxonomy-assign --node-path Root --limit 10 --offset 0 --exclude-path-keyword lectures --exclude-path-keyword archive
 ```
 
 Run taxonomy assignment over filtered documents under the root node:
 
 ```bash
-pdfzx/.venv/bin/python client.py run-taxonomy-assign --node-path Root --require-digital --require-toc --limit 100 --offset 0 --max-concurrency 5
+pdfzx/.venv/bin/python client.py run-taxonomy-assign --node-path Root --require-digital --require-toc --limit 100 --offset 0 --max-concurrency 5 --exclude-path-keyword lectures --exclude-path-keyword archive
 ```
 
 Show readable taxonomy assignment rows:
@@ -275,7 +289,7 @@ pdfzx/.venv/bin/python client.py show-taxonomy-assignments --node-path Root --st
 Apply pending high-confidence assignments while excluding manual path buckets:
 
 ```bash
-pdfzx/.venv/bin/python client.py apply-taxonomy-assignments --node-path Root --minimum-confidence high --exclude-path-keyword uni --exclude-path-keyword ff --exclude-path-keyword ait --exclude-path-keyword hkoi
+pdfzx/.venv/bin/python client.py apply-taxonomy-assignments --node-path Root --minimum-confidence high --exclude-path-keyword lectures --exclude-path-keyword archive --exclude-path-keyword inbox --exclude-path-keyword misc
 ```
 
 Show direct document counts grouped by taxonomy node:

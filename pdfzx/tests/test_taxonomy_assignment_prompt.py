@@ -10,6 +10,7 @@ from pdfzx.models import DocumentRecord
 from pdfzx.partitioning.assignment import assign_taxonomy_child
 from pdfzx.prompts.taxonomy_assignment import TAXONOMY_ASSIGNMENT_PROMPT_VERSION
 from pdfzx.prompts.taxonomy_assignment import TAXONOMY_ASSIGNMENT_SYSTEM_PROMPT
+from pdfzx.prompts.taxonomy_assignment import TaxonomyAssignmentChildOption
 from pdfzx.prompts.taxonomy_assignment import TaxonomyAssignmentResponse
 from pdfzx.prompts.taxonomy_assignment import build_taxonomy_assignment_prompt_input
 from pdfzx.prompts.taxonomy_assignment import build_taxonomy_assignment_user_prompt
@@ -18,13 +19,22 @@ from pdfzx.prompts.taxonomy_assignment import build_taxonomy_assignment_user_pro
 def test_taxonomy_assignment_prompt_user_payload_is_json() -> None:
     prompt_input = build_taxonomy_assignment_prompt_input(
         node_path="Root",
-        child_labels=["Physics", "Mathematics", "Others"],
+        child_options=[
+            TaxonomyAssignmentChildOption(
+                label="Physics", topic_terms=["Quantum Mechanics", "Electromagnetism"]
+            ),
+            TaxonomyAssignmentChildOption(label="Mathematics", topic_terms=[]),
+            TaxonomyAssignmentChildOption(label="Others", topic_terms=[]),
+        ],
         record=DocumentRecord(
             sha256="a" * 64,
             md5="b" * 32,
             file_name="Quantum Mechanics Notes.pdf",
             normalised_name="Quantum Mechanics Notes.pdf",
-            paths=["Root/old/Quantum Mechanics Notes.pdf"],
+            paths=[
+                "Root/old/Quantum Mechanics Notes.pdf",
+                "Books/Physics/Quantum Mechanics Notes.pdf",
+            ],
             first_seen_job="job-1",
             last_seen_job="job-1",
         ),
@@ -33,16 +43,27 @@ def test_taxonomy_assignment_prompt_user_payload_is_json() -> None:
     payload = build_taxonomy_assignment_user_prompt(prompt_input)
     decoded = json.loads(payload)
     assert decoded["node_path"] == "Root"
-    assert decoded["child_labels"] == ["Physics", "Mathematics", "Others"]
+    assert decoded["child_options"][0] == {
+        "label": "Physics",
+        "topic_terms": ["Quantum Mechanics", "Electromagnetism"],
+    }
     assert "sha256" not in decoded["document"]
+    assert decoded["document"]["current_paths"] == [
+        "Books/Physics/Quantum Mechanics Notes.pdf",
+        "Root/old/Quantum Mechanics Notes.pdf",
+    ]
 
 
 def test_taxonomy_assignment_prompt_constants_are_defined() -> None:
-    assert TAXONOMY_ASSIGNMENT_PROMPT_VERSION == "v4"
-    assert "either assign the document to one existing child label or keep it in the current node" in (
+    assert TAXONOMY_ASSIGNMENT_PROMPT_VERSION == "v5"
+    assert (
+        "either assign the document to one existing child label or keep it in the current node"
+        in (TAXONOMY_ASSIGNMENT_SYSTEM_PROMPT)
+    )
+    assert "current document paths as a strong prior" in TAXONOMY_ASSIGNMENT_SYSTEM_PROMPT
+    assert "use child topic terms to disambiguate similar child labels" in (
         TAXONOMY_ASSIGNMENT_SYSTEM_PROMPT
     )
-    assert "current_path as a strong prior" in TAXONOMY_ASSIGNMENT_SYSTEM_PROMPT
     assert "do not assign by filename keyword alone" in TAXONOMY_ASSIGNMENT_SYSTEM_PROMPT
 
 
@@ -62,7 +83,11 @@ def test_taxonomy_assignment_response_requires_non_empty_reasoning_summary(
 def test_assign_taxonomy_child_retries_rate_limit() -> None:
     prompt_input = build_taxonomy_assignment_prompt_input(
         node_path="Root",
-        child_labels=["Physics", "Mathematics", "Others"],
+        child_options=[
+            TaxonomyAssignmentChildOption(label="Physics", topic_terms=["Mechanics"]),
+            TaxonomyAssignmentChildOption(label="Mathematics", topic_terms=[]),
+            TaxonomyAssignmentChildOption(label="Others", topic_terms=[]),
+        ],
         record=DocumentRecord(
             sha256="a" * 64,
             md5="b" * 32,
@@ -113,7 +138,12 @@ def test_assign_taxonomy_child_retries_rate_limit() -> None:
 def test_assign_taxonomy_child_allows_stay_action() -> None:
     prompt_input = build_taxonomy_assignment_prompt_input(
         node_path="Root/Computer Science/Programming",
-        child_labels=["Python", "Java", "C++", "Others"],
+        child_options=[
+            TaxonomyAssignmentChildOption(label="Python", topic_terms=["Django"]),
+            TaxonomyAssignmentChildOption(label="Java", topic_terms=["JVM"]),
+            TaxonomyAssignmentChildOption(label="C++", topic_terms=["Templates"]),
+            TaxonomyAssignmentChildOption(label="Others", topic_terms=[]),
+        ],
         record=DocumentRecord(
             sha256="c" * 64,
             md5="d" * 32,
