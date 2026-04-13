@@ -8,6 +8,7 @@ from openai import OpenAI
 
 from pdfzx.prompts.taxonomy_partition_generalize import TAXONOMY_PARTITION_GENERALIZE_SYSTEM_PROMPT
 from pdfzx.prompts.taxonomy_partition_generalize import TaxonomyPartitionGeneralizePromptInput
+from pdfzx.prompts.taxonomy_partition_generalize import TaxonomyPartitionGeneralizeProposal
 from pdfzx.prompts.taxonomy_partition_generalize import TaxonomyPartitionGeneralizeResponse
 from pdfzx.prompts.taxonomy_partition_generalize import (
     build_taxonomy_partition_generalize_user_prompt,
@@ -24,9 +25,8 @@ class PartitionGeneralizeResult:
 
 def generalize_taxonomy_bag(  # noqa: PLR0913
     *,
-    taxonomy_bag_before: list[str],
-    candidate_counts: dict[str, int] | None = None,
-    bag_size_limit: int = 10,
+    proposals: list[TaxonomyPartitionGeneralizeProposal],
+    category_limit: int = 10,
     online_features: bool,
     openai_api_key: str | None,
     openai_model: str,
@@ -40,9 +40,8 @@ def generalize_taxonomy_bag(  # noqa: PLR0913
         msg = "PDFZX_OPENAI_API_KEY is required for taxonomy partition generalization"
         raise ValueError(msg)
     prompt_input = TaxonomyPartitionGeneralizePromptInput(
-        bag_size_limit=bag_size_limit,
-        taxonomy_bag_before=taxonomy_bag_before,
-        candidate_counts=candidate_counts or {},
+        category_limit=category_limit,
+        proposals=proposals,
     )
     response = (client or OpenAI(api_key=openai_api_key)).responses.parse(
         model=openai_model,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pdfzx.partitioning.generalize import generalize_taxonomy_bag
+from pdfzx.prompts.taxonomy_partition_generalize import TaxonomyPartitionGeneralizeProposal
 from pdfzx.prompts.taxonomy_partition_generalize import TaxonomyPartitionGeneralizeResponse
 
 
@@ -27,21 +28,26 @@ class _FakeClient:
 def test_generalize_taxonomy_bag_calls_prompt_and_returns_structured_payload() -> None:
     fake_client = _FakeClient(
         TaxonomyPartitionGeneralizeResponse(
-            taxonomy_bag_after=["Physics", "Mathematics", "Computer Science"],
+            categories=["Physics", "Mathematics", "Computer Science"],
+            supporting=[],
         )
     )
 
     result = generalize_taxonomy_bag(
-        taxonomy_bag_before=["Quantum Mechanics", "Mathematics Analysis"],
-        candidate_counts={"Physics": 4, "Mathematics": 3},
+        proposals=[
+            TaxonomyPartitionGeneralizeProposal(
+                categories=["Physics", "Mathematics"],
+                supporting=[],
+            )
+        ],
         online_features=True,
         openai_api_key="test-key",
         openai_model="gpt-4o-mini",
         client=fake_client,
     )
 
-    assert result.prompt_input["candidate_counts"]["Physics"] == 4
-    assert result.parsed_response["taxonomy_bag_after"] == [
+    assert result.prompt_input["proposals"][0]["categories"] == ["Physics", "Mathematics"]
+    assert result.parsed_response["categories"] == [
         "Physics",
         "Mathematics",
         "Computer Science",

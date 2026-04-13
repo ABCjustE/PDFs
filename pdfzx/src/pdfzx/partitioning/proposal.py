@@ -25,8 +25,7 @@ def propose_taxonomy_bags(  # noqa: PLR0913
     *,
     batch_index: int,
     chunk_documents: list[SampledDocumentSummary],
-    taxonomy_bag_before: list[str] | None = None,
-    bag_size_limit: int = 10,
+    category_limit: int = 10,
     online_features: bool,
     openai_api_key: str | None,
     openai_model: str,
@@ -41,8 +40,7 @@ def propose_taxonomy_bags(  # noqa: PLR0913
         raise ValueError(msg)
     prompt_input = TaxonomyPartitionProposalPromptInput(
         batch_index=batch_index,
-        bag_size_limit=bag_size_limit,
-        taxonomy_bag_before=taxonomy_bag_before or [],
+        category_limit=category_limit,
         chunk_documents=chunk_documents,
     )
     response = (client or OpenAI(api_key=openai_api_key)).responses.parse(

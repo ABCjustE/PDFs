@@ -9,6 +9,7 @@ from pdfzx.prompts.taxonomy_partition_proposal import TAXONOMY_PARTITION_PROPOSA
 from pdfzx.prompts.taxonomy_partition_proposal import TAXONOMY_PARTITION_PROPOSAL_SYSTEM_PROMPT
 from pdfzx.prompts.taxonomy_partition_proposal import SampledDocumentSummary
 from pdfzx.prompts.taxonomy_partition_proposal import TaxonomyPartitionProposalResponse
+from pdfzx.prompts.taxonomy_partition_proposal import TaxonomyPartitionSupportingGroup
 from pdfzx.prompts.taxonomy_partition_proposal import build_sampled_document_summary
 from pdfzx.prompts.taxonomy_partition_proposal import build_taxonomy_partition_proposal_user_prompt
 
@@ -41,7 +42,7 @@ def test_partition_proposal_prompt_user_payload_is_json() -> None:
             {
                 "model_dump": lambda self, mode="json": {
                     "batch_index": 0,
-                    "taxonomy_bag_before": ["Programming"],
+                    "category_limit": 10,
                     "chunk_documents": [
                         {
                             "sha256": "abc",
@@ -62,9 +63,11 @@ def test_partition_proposal_prompt_user_payload_is_json() -> None:
 
 
 def test_partition_proposal_prompt_constants_are_defined() -> None:
-    assert TAXONOMY_PARTITION_PROPOSAL_PROMPT_VERSION == "v1"
-    assert "accumulating candidate taxonomy categories" in TAXONOMY_PARTITION_PROPOSAL_SYSTEM_PROMPT
-    assert "path-safe" in TAXONOMY_PARTITION_PROPOSAL_SYSTEM_PROMPT
+    assert TAXONOMY_PARTITION_PROPOSAL_PROMPT_VERSION == "v2"
+    assert "main subject clusters" in TAXONOMY_PARTITION_PROPOSAL_SYSTEM_PROMPT
+    assert "use narrower topics only as supporting evidence" in (
+        TAXONOMY_PARTITION_PROPOSAL_SYSTEM_PROMPT
+    )
 
 
 def test_build_sampled_document_summary_is_compact() -> None:
@@ -91,7 +94,13 @@ def test_build_sampled_document_summary_is_compact() -> None:
 def test_propose_taxonomy_bags_calls_prompt_and_returns_structured_payload() -> None:
     fake_client = _FakeClient(
         TaxonomyPartitionProposalResponse(
-            taxonomy_bag_after=["Python", "Workshop Series"],
+            categories=["Computer Science", "Workshop Series"],
+            supporting=[
+                TaxonomyPartitionSupportingGroup(
+                    category="Computer Science",
+                    topics=["Python"],
+                )
+            ],
         )
     )
 
@@ -106,7 +115,6 @@ def test_propose_taxonomy_bags_calls_prompt_and_returns_structured_payload() -> 
                 metadata_title="Clean Code in Python",
             )
         ],
-        taxonomy_bag_before=["Programming"],
         online_features=True,
         openai_api_key="test-key",
         openai_model="gpt-4o-mini",
@@ -115,5 +123,7 @@ def test_propose_taxonomy_bags_calls_prompt_and_returns_structured_payload() -> 
 
     assert result.prompt_input["batch_index"] == 0
     assert result.prompt_input["chunk_documents"][0]["sha256"] == "a"
-    assert result.parsed_response["taxonomy_bag_after"] == ["Python", "Workshop Series"]
+    assert result.parsed_response["categories"] == ["Computer Science", "Workshop Series"]
+    assert result.parsed_response["supporting"][0]["category"] == "Computer Science"
+    assert result.parsed_response["supporting"][0]["topics"] == ["Python"]
     assert len(fake_client.responses.calls) == 1

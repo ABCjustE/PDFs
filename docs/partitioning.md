@@ -1,324 +1,192 @@
-`taxonomy_partitioning` is currently a partial persisted workflow:
+# Taxonomy Partitioning
 
-- root/node bootstrap exists
-- generalized child-node creation exists
-- document-to-child assignment probing and pending-row persistence exist
+The taxonomy workflow is node-based.
 
-## What Is Implemented
+Current stages:
 
-Deterministic batching:
+1. partition one node into child categories
+2. inspect the proposed document assignments for that node
+3. apply selected assignments into child memberships
+4. recurse on a child node if it is still broad enough
 
-- [pdfzx/src/pdfzx/partitioning/sampler.py](../pdfzx/src/pdfzx/partitioning/sampler.py)
-  - `seeded_shuffle(items, seed=...)`
-  - `chunk_items(items, chunk_size=...)`
+## Data Model
 
-Batch accumulation prompt:
+Core tables:
 
-- [pdfzx/src/pdfzx/prompts/taxonomy_partition_proposal.py](../pdfzx/src/pdfzx/prompts/taxonomy_partition_proposal.py)
-  - takes one shuffled chunk of document summaries
-  - returns an accumulated candidate taxonomy bag
-  - keeps `sha256` in Python-side summaries for traceability
-  - strips `sha256` before sending the prompt payload to the model
+- `taxonomy_nodes`
+  - tree structure
+- `taxonomy_node_documents`
+  - current document membership for each node
+- `taxonomy_assignments`
+  - reviewable document-to-child assignment decisions
+- `taxonomy_node_topic_terms`
+  - normalized narrower terms attached to a node (valid to review, and used for assignment prompt)
 
-Batch accumulation runner:
+Current persistence status:
 
-- [pdfzx/src/pdfzx/partitioning/proposal.py](../pdfzx/src/pdfzx/partitioning/proposal.py)
-  - `propose_taxonomy_bags(...)`
+- `run-taxonomy-partition` persists child nodes
+- `run-taxonomy-assign` persists assignment rows
+- `apply-taxonomy-assignments` mutates `taxonomy_node_documents`
+- `taxonomy_node_topic_terms` exists in schema, but is not populated by the workflow yet
 
-Final generalization prompt:
+## Partition Mechanism
 
-- [pdfzx/src/pdfzx/prompts/taxonomy_partition_generalize.py](../pdfzx/src/pdfzx/prompts/taxonomy_partition_generalize.py)
-  - takes accumulated categories plus counts
-  - collapses them into a compact parent-layer bag
+Partitioning is a two-stage LLM flow.
 
-Final generalization runner:
+Stage 1: proposal
 
-- [pdfzx/src/pdfzx/partitioning/generalize.py](../pdfzx/src/pdfzx/partitioning/generalize.py)
-  - `generalize_taxonomy_bag(...)`
+- sample one or more batches from the target node's current memberships
+- each batch prompt returns JSON with:
+  - `categories`
+  - `supporting`
+- `categories` are broad category names
+- `supporting` is a list of narrower topic groups, for example:
 
-Client probes:
-
-- [client.py](../client.py)
-  - `probe-taxonomy-partition`
-  - `probe-taxonomy-partition-generalize`
-  - `probe-taxonomy-assign`
-  - `run-taxonomy-partition`
-  - `run-taxonomy-assign`
-  - `show-taxonomy-assignments`
-  - `apply-taxonomy-assignments`
-
-Tree persistence:
-
-- [pdfzx/src/pdfzx/db/models.py](../pdfzx/src/pdfzx/db/models.py)
-  - `TaxonomyNode`
-  - `TaxonomyNodeDocument`
-  - `TaxonomyAssignment`
-
-- [pdfzx/src/pdfzx/db/repositories/taxonomy_tree.py](../pdfzx/src/pdfzx/db/repositories/taxonomy_tree.py)
-  - `ensure_root_node(...)`
-  - `sync_root_documents(...)`
-  - `ensure_child_node(...)`
-  - membership and assignment CRUD helpers
-
-## Commands
-
-Bootstrap root only:
-
-```bash
-python client.py bootstrap-taxonomy-root
+```json
+{
+  "categories": ["Computer Science", "Mathematics"],
+  "supporting": [
+    {
+      "category": "Computer Science",
+      "topics": ["Data Structures", "Algorithms"]
+    },
+    {
+      "category": "Mathematics",
+      "topics": ["Linear Algebra", "Calculus"]
+    }
+  ]
+}
 ```
 
-Probe accumulation only:
+Stage 2: generalize
+
+- merge the proposal JSONs from several batches
+- return one final JSON in the same shape:
+  - `categories`
+  - `supporting`
+- `category_limit` controls breadth:
+  - smaller limit -> broader categories
+  - larger limit -> keep more distinction
+
+`run-taxonomy-partition` uses the final `categories` to create child nodes.
+
+## Partition Commands
+
+Probe proposal batches only:
 
 ```bash
-python client.py probe-taxonomy-partition --chunk-size 20 --batch-index 0 --batch-count 3 --carry-bag
+python client.py probe-taxonomy-partition --node-path Root --chunk-size 50 --batch-offset 0 --batch-count 1 --category-limit 10
 ```
 
-Probe accumulation plus final generalization:
+Probe proposal plus merged result:
 
 ```bash
-python client.py probe-taxonomy-partition-generalize --chunk-size 500 --batch-index 0 --batch-count 7
+python client.py probe-taxonomy-partition-generalize --node-path Root --chunk-size 50 --batch-offset 0 --batch-count 3 --category-limit 10
 ```
 
-Probe one-by-one document assignment under an existing node:
+Persist a node partition:
+
+```bash
+python client.py run-taxonomy-partition --node-path Root --chunk-size 500 --batch-offset 0 --batch-count 7 --category-limit 10
+```
+
+Shared partition flags:
+
+- `--node-path`
+- `--chunk-size`
+- `--batch-offset`
+- `--batch-count`
+- `--category-limit`
+- repeated `--exclude-path-keyword`
+
+Path-keyword exclusions are applied before batching. Example:
+
+```bash
+python client.py probe-taxonomy-partition --node-path Root --exclude-path-keyword HKUSTthings --exclude-path-keyword HKOI --exclude-path-keyword ait38 --exclude-path-keyword ff48
+```
+
+`run-taxonomy-partition` behavior:
+
+- if `Root` does not exist, it creates `Root`, syncs all documents into it, and exits
+- otherwise it runs proposal batches, runs generalize, and persists child nodes
+- rerunning a node replaces the existing child subtree under that node
+
+## Assignment Commands
+
+Probe assignment decisions without writing:
 
 ```bash
 python client.py probe-taxonomy-assign --node-path Root --limit 10 --offset 0
 ```
 
-Run persisted one-by-one document assignment under an existing node:
+Persist pending assignment rows:
 
 ```bash
 python client.py run-taxonomy-assign --node-path Root --require-digital --require-toc --limit 100 --offset 0 --max-concurrency 5
 ```
 
-Show readable assignment rows for one node:
+Inspect readable assignment rows:
 
 ```bash
-python client.py show-taxonomy-assignments --node-path Root --limit 50 --offset 0
+python client.py show-taxonomy-assignments --node-path Root --status pending --limit 50 --offset 0
 ```
 
-Apply pending high-confidence assignments into child memberships:
+Apply high-confidence assignments:
 
 ```bash
 python client.py apply-taxonomy-assignments --node-path Root --minimum-confidence high --exclude-path-keyword HKUSTthings --exclude-path-keyword ait38 --exclude-path-keyword ff48
 ```
 
-Run persisted node partitioning:
+Assignment behavior:
+
+- assignment uses the node's existing child labels as allowed child targets
+- the prompt may also decide a document should stay at the current node
+- `run-taxonomy-assign` writes `taxonomy_assignments` with `status="pending"`
+- `--force` re-requests and overwrites existing assignment rows
+- existing rows are skipped by default
+- `--output-ndjson` writes durable per-item progress
+
+Apply behavior:
+
+- only qualifying pending rows are applied
+- applied documents move from the parent node membership to the assigned child node membership
+- assignment status changes from `pending` to `applied`
+- excluded path keywords are skipped and left untouched
+
+## Inspection Commands
+
+Show direct membership counts per node:
 
 ```bash
-python client.py run-taxonomy-partition --node-path Root --chunk-size 500 --batch-index 0 --batch-count 7
+python client.py show-taxonomy-node-stats --depth 1
 ```
 
-`run-taxonomy-partition` behavior:
+Show documents under one node:
 
-- if `Root` does not exist, it creates `Root`, syncs all current document hashes into it, and exits
-- rerun the same command after bootstrap to execute the LLM partition flow
-- successful runs persist child `TaxonomyNode` rows under the target parent node
-- reruns replace the existing child subtree under that parent before persisting the new one
+```bash
+python client.py show-taxonomy-node-documents --node-path 'Root/Physics' --limit 50 --offset 0
+```
 
-Shared partition args:
+## Typical Operator Loop
 
-- `--chunk-size`
-- `--batch-index`
-- `--batch-count`
-- `--bag`
-- `--bag-size-limit`
-- `--carry-bag`
+Example for one node:
 
-`run-taxonomy-partition` also takes:
+```bash
+python client.py run-taxonomy-partition --node-path 'Root/Computer Science'
+python client.py run-taxonomy-assign --node-path 'Root/Computer Science' --limit 100 --offset 0 --max-concurrency 5
+python client.py show-taxonomy-assignments --node-path 'Root/Computer Science' --status pending --limit 50 --offset 0
+python client.py apply-taxonomy-assignments --node-path 'Root/Computer Science' --minimum-confidence high
+python client.py show-taxonomy-node-stats --depth 2
+```
 
-- `--node-path`
+## Manual Adjustment
 
-`probe-taxonomy-assign` takes:
+After `run-taxonomy-partition`, child nodes are created in `taxonomy_nodes`.
 
-- `--node-path`
-- `--limit`
-- `--offset`
-- `--require-digital`
-- `--require-toc`
+Before assignment, it is valid to adjust those child nodes manually, for example:
 
-`run-taxonomy-assign` takes:
+- add a missing child node
+- rename a child node
+- delete an unwanted child node
 
-- `--node-path`
-- `--limit`
-- `--offset`
-- `--require-digital`
-- `--require-toc`
-- `--force`
-- `--max-concurrency`
-- `--output-ndjson`
-
-`show-taxonomy-assignments` takes:
-
-- `--node-path`
-- `--limit`
-- `--offset`
-
-`apply-taxonomy-assignments` takes:
-
-- `--node-path`
-- `--minimum-confidence`
-- repeated `--exclude-path-keyword`
-
-`probe-taxonomy-assign` behavior:
-
-- uses the target node's existing child labels as the only allowed assignment targets
-- probes documents in the node's current membership order
-- filters that membership first when `--require-digital` and/or `--require-toc` are set
-- `--offset` is the start index into that ordered membership list
-- no assignment rows or child memberships are persisted
-
-`run-taxonomy-assign` behavior:
-
-- uses the target node's existing child labels as the only allowed assignment targets
-- filters the node's current membership first when `--require-digital` and/or `--require-toc` are set
-- skips existing `(node_id, sha256)` assignment rows by default
-- `--force` re-requests and overwrites existing assignment rows for the selected documents
-- persists `TaxonomyAssignment` rows with:
-  - `assigned_child_id`
-  - `confidence`
-  - `reasoning_summary`
-  - `status="pending"`
-- persists successful rows incrementally as results complete
-- retries rate-limit failures with backoff
-- appends per-item progress to `--output-ndjson` when configured
-- does not mutate `taxonomy_node_documents`
-- higher-confidence apply logic exists in the repository layer, but is not exposed as a CLI command yet
-
-`show-taxonomy-assignments` behavior:
-
-- reads from `taxonomy_assignments`
-- joins readable document and node paths
-- hides raw ids and hashes
-- shows:
-  - `node`
-  - `document`
-  - `assigned`
-  - `confidence`
-  - `reasoning`
-
-`apply-taxonomy-assignments` behavior:
-
-- reads pending rows from `taxonomy_assignments`
-- applies only rows at or above `--minimum-confidence`
-- adds applied documents to the assigned child node membership in `taxonomy_node_documents`
-- changes those assignment rows from `pending` to `applied`
-- leaves low-confidence, already-applied, or excluded rows untouched
-- repeated `--exclude-path-keyword` values skip documents whose current path contains any of those keywords
-
-## Current Workflow
-
-The current probing flow is:
-
-1. load document `sha256`s from SQLite
-2. apply `PDFZX_PARTITION_SEED`
-3. split by `PDFZX_PARTITION_CHUNK_SIZE` or `--chunk-size`
-4. run one or more accumulation batches
-5. optionally carry the accumulated bag forward
-6. count candidate category outputs
-7. run final generalization over those counts
-
-The current persisted run adds one more step:
-
-8. create child nodes under the target parent from the generalized taxonomy bag
-
-The current assignment run adds another separate step:
-
-9. assign documents under one parent node into the parent's existing child labels and persist pending assignment rows
-
-This is enough to test top-layer discovery, persist child nodes, and persist reviewable document-to-child assignment guesses. It is still not a full recursive orchestration flow.
-
-## What Improved
-
-The earlier one-stage prompt tended to produce narrow local outputs such as:
-
-- `Physics Solutions`
-- `Quantum Mechanics`
-- `Mathematics Analysis`
-
-That was not suitable for a parent layer.
-
-The current two-stage design improved this by separating:
-
-- batch-local accumulation
-- final collapse/generalization
-
-In practice, larger probes with more coverage produced a more useful generalized bag.
-
-## Practical Result
-
-For a collection of roughly `4k` documents, a run using:
-
-- chunk size `200`
-- batch count `10`
-
-gave a noticeably more representative parent-layer taxonomy than small local probes.
-
-That means the current implementation is useful for:
-
-- exploratory top-layer category discovery
-- prompt iteration
-- checking stability across seeds
-
-## What Is Not Implemented Yet
-
-Missing pieces:
-
-- recursive orchestration of partition -> assign -> apply across child nodes
-
-## Tree Model
-
-Implemented tables:
-
-### `taxonomy_nodes`
-
-- `id`
-- `parent_id`
-- `name`
-- `path`
-- `depth`
-
-### `taxonomy_node_documents`
-
-- `node_id`
-- `sha256`
-
-Composite key:
-
-- `(node_id, sha256)`
-
-### `taxonomy_assignments`
-
-- `node_id`
-- `sha256`
-- `assigned_child_id`
-- `confidence`
-- `reasoning_summary`
-- `status`
-
-Suggested `status` values:
-
-- `pending`
-- `applied`
-- `rejected`
-- `manual_touched`
-
-## Why The Composite Key Is Enough
-
-Taxonomy identity is per canonical document, not per path.
-
-If several files share the same `sha256`, they are the same document for taxonomy purposes.
-
-So:
-
-- no complex identity key is needed
-- `(node_id, sha256)` is the natural composite key for both membership and assignment
-
-## Recommended Next Step
-
-The next backend milestone is:
-
-- implement one-by-one document assignment from a parent node into its existing child nodes
-
-That should write `TaxonomyAssignment` rows first, before mutating child memberships.
+That manual review step is often useful before running assignment on a new node.

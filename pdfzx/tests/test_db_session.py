@@ -31,5 +31,6 @@ def test_init_sqlite_db_creates_current_llm_document_suggestion_columns(
         assert "taxonomy_nodes" in tables
         assert "taxonomy_node_documents" in tables
         assert "taxonomy_assignments" in tables
+        assert "taxonomy_node_topic_terms" in tables
     finally:
         connection.close()

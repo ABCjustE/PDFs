@@ -148,6 +148,34 @@ def test_taxonomy_tree_repository_ensures_child_node(tmp_path) -> None:
         engine.dispose()
 
 
+def test_taxonomy_tree_repository_replaces_topic_terms(tmp_path) -> None:
+    db_path = tmp_path / "db.sqlite3"
+    init_sqlite_db(db_path)
+    engine = create_sqlite_engine(db_path)
+    try:
+        with Session(engine) as session:
+            repo = TaxonomyTreeRepository(session)
+            root = repo.ensure_root_node()
+            physics = repo.ensure_child_node(
+                parent_id=root.id,
+                parent_path=root.path,
+                name="Physics",
+            )
+            assert repo.replace_topic_terms(
+                node_id=physics.id,
+                terms=["Quantum Mechanics", " Electromagnetism ", "Quantum Mechanics", ""],
+            ) == 2
+            assert repo.list_topic_terms(node_id=physics.id) == [
+                "Electromagnetism",
+                "Quantum Mechanics",
+            ]
+            assert repo.replace_topic_terms(node_id=physics.id, terms=["Mechanics"]) == 1
+            assert repo.list_topic_terms(node_id=physics.id) == ["Mechanics"]
+            session.commit()
+    finally:
+        engine.dispose()
+
+
 def test_taxonomy_tree_repository_replaces_child_subtree(tmp_path) -> None:
     db_path = tmp_path / "db.sqlite3"
     init_sqlite_db(db_path)
@@ -232,6 +260,7 @@ def test_taxonomy_tree_repository_applies_high_confidence_assignments(tmp_path) 
                 parent_path=root.path,
                 name="Physics",
             )
+            repo.add_documents(node_id=root.id, sha256s=["a", "b"])
             repo.upsert_assignment(
                 node_id=root.id,
                 sha256="a",
@@ -251,6 +280,7 @@ def test_taxonomy_tree_repository_applies_high_confidence_assignments(tmp_path) 
             summary = repo.apply_assignments(node_id=root.id, minimum_confidence="high")
             assert summary == {"applied": 1, "skipped": 1, "excluded": 0}
             assert repo.list_document_sha256s(node_id=physics.id) == ["a"]
+            assert repo.list_document_sha256s(node_id=root.id) == ["b"]
             assignments = repo.list_assignments(node_id=root.id)
             assert assignments[0].status == "applied"
             assert assignments[1].status == "pending"
@@ -284,6 +314,7 @@ def test_taxonomy_tree_repository_lists_assignment_views(tmp_path) -> None:
                 parent_path=root.path,
                 name="Physics",
             )
+            repo.add_documents(node_id=root.id, sha256s=["a", "b"])
             repo.upsert_assignment(
                 node_id=root.id,
                 sha256="a",
@@ -300,6 +331,9 @@ def test_taxonomy_tree_repository_lists_assignment_views(tmp_path) -> None:
             assert rows[0].confidence == "high"
             assert rows[0].status == "pending"
             assert rows[0].reasoning_summary == "Path strongly indicates physics."
+            filtered_rows = repo.list_assignment_views(node_id=root.id, status="pending")
+            assert len(filtered_rows) == 1
+            assert repo.list_assignment_views(node_id=root.id, status="applied") == []
             session.commit()
     finally:
         engine.dispose()
@@ -346,6 +380,7 @@ def test_taxonomy_tree_repository_applies_with_path_keyword_exclusions(tmp_path)
                 parent_path=root.path,
                 name="Physics",
             )
+            repo.add_documents(node_id=root.id, sha256s=["a", "b"])
             repo.upsert_assignment(
                 node_id=root.id,
                 sha256="a",
@@ -369,6 +404,7 @@ def test_taxonomy_tree_repository_applies_with_path_keyword_exclusions(tmp_path)
             )
             assert summary == {"applied": 1, "skipped": 0, "excluded": 1}
             assert repo.list_document_sha256s(node_id=physics.id) == ["a"]
+            assert repo.list_document_sha256s(node_id=root.id) == ["b"]
             assignments = repo.list_assignments(node_id=root.id)
             assert assignments[0].status == "applied"
             assert assignments[1].status == "pending"
@@ -464,6 +500,67 @@ def test_taxonomy_tree_repository_lists_node_document_views(tmp_path) -> None:
             assert rows[0].node_path == "Root/Physics"
             assert rows[0].sha256 == "a"
             assert rows[0].document_path == "Books/Physics/a.pdf"
+            session.commit()
+    finally:
+        engine.dispose()
+
+
+def test_taxonomy_tree_repository_lists_topic_terms(tmp_path) -> None:
+    db_path = tmp_path / "db.sqlite3"
+    init_sqlite_db(db_path)
+    engine = create_sqlite_engine(db_path)
+    try:
+        with Session(engine) as session:
+            repo = TaxonomyTreeRepository(session)
+            root = repo.ensure_root_node()
+            physics = repo.ensure_child_node(
+                parent_id=root.id,
+                parent_path=root.path,
+                name="Physics",
+            )
+            repo.replace_topic_terms(
+                node_id=physics.id,
+                terms=["Quantum Mechanics", "Electromagnetism"],
+            )
+            assert repo.list_topic_terms(node_id=physics.id) == [
+                "Electromagnetism",
+                "Quantum Mechanics",
+            ]
+            session.commit()
+    finally:
+        engine.dispose()
+
+
+def test_taxonomy_tree_repository_lists_node_term_views(tmp_path) -> None:
+    db_path = tmp_path / "db.sqlite3"
+    init_sqlite_db(db_path)
+    engine = create_sqlite_engine(db_path)
+    try:
+        with Session(engine) as session:
+            repo = TaxonomyTreeRepository(session)
+            root = repo.ensure_root_node()
+            physics = repo.ensure_child_node(
+                parent_id=root.id,
+                parent_path=root.path,
+                name="Physics",
+            )
+            mathematics = repo.ensure_child_node(
+                parent_id=root.id,
+                parent_path=root.path,
+                name="Mathematics",
+            )
+            repo.replace_topic_terms(node_id=physics.id, terms=["Quantum Mechanics"])
+            repo.replace_topic_terms(node_id=mathematics.id, terms=["Linear Algebra"])
+            assert [
+                (row.node_id, row.node_path, row.term) for row in repo.list_node_term_views()
+            ] == [
+                (mathematics.id, "Root/Mathematics", "Linear Algebra"),
+                (physics.id, "Root/Physics", "Quantum Mechanics"),
+            ]
+            assert [
+                (row.node_id, row.node_path, row.term)
+                for row in repo.list_node_term_views(node_id=physics.id)
+            ] == [(physics.id, "Root/Physics", "Quantum Mechanics")]
             session.commit()
     finally:
         engine.dispose()

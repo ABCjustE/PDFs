@@ -44,6 +44,7 @@ from pdfzx.partitioning.proposal import propose_taxonomy_bags
 from pdfzx.partitioning.sampler import chunk_items
 from pdfzx.partitioning.sampler import seeded_shuffle
 from pdfzx.prompts.taxonomy_assignment import build_taxonomy_assignment_prompt_input
+from pdfzx.prompts.taxonomy_partition_generalize import TaxonomyPartitionGeneralizeProposal
 from pdfzx.prompts.taxonomy_partition_proposal import build_sampled_document_summary
 from pdfzx.storage import JsonStorage
 from pdfzx.storage import SqliteStorage
@@ -137,7 +138,7 @@ def _base_parser(default_config: ScanConfig) -> argparse.ArgumentParser:
         "--root",
         type=Path,
         default=default_config.root_path,
-        help="Inventory root directory.",
+        help="Inventory root directory. (maybe you have Any, All built as another tree",
     )
     parser.add_argument(
         "--db",
@@ -215,6 +216,7 @@ def _show_taxonomy_assignments(
     sqlite_db_path: Path,
     *,
     node_path: str,
+    status: str | None,
     limit: int | None,
     offset: int,
 ) -> str:
@@ -228,6 +230,7 @@ def _show_taxonomy_assignments(
                 raise ValueError(msg)
             assignment_rows = repo.list_assignment_views(
                 node_id=node.id,
+                status=status,
                 limit=limit,
                 offset=offset,
             )
@@ -241,6 +244,7 @@ def _show_taxonomy_assignments(
             "document_path": (row.document_path or "").replace("\n", " ").strip(),
             "assigned_path": (row.assigned_path or "").replace("\n", " ").strip(),
             "confidence": (row.confidence or "").replace("\n", " ").strip(),
+            "status": (row.status or "").replace("\n", " ").strip(),
             "reasoning": _truncate_reasoning(row.reasoning_summary, width=100),
         }
         for row in assignment_rows
@@ -252,6 +256,7 @@ def _show_taxonomy_assignments(
             ("document_path", "document", 48),
             ("assigned_path", "assigned", 28),
             ("confidence", "confidence", 10),
+            ("status", "status", 14),
             ("reasoning", "reasoning", 48),
         ],
     )
@@ -352,6 +357,49 @@ def _show_taxonomy_node_documents(
     )
 
 
+def _show_taxonomy_node_terms(
+    sqlite_db_path: Path,
+    *,
+    node_path: str | None,
+    limit: int | None,
+    offset: int,
+) -> str:
+    engine = create_sqlite_engine(sqlite_db_path)
+    try:
+        with Session(engine) as session:
+            repo = TaxonomyTreeRepository(session)
+            if node_path is None:
+                rows = repo.list_node_term_views(limit=limit, offset=offset)
+            else:
+                node = repo.get_node_by_path(path=node_path)
+                if node is None:
+                    msg = f"Taxonomy node not found: {node_path}"
+                    raise ValueError(msg)
+                rows = repo.list_node_term_views(node_id=node.id, limit=limit, offset=offset)
+    finally:
+        engine.dispose()
+    if not rows:
+        if node_path is None:
+            return "No taxonomy node terms found."
+        return f"No taxonomy node terms found for node: {node_path}"
+    table_rows = [
+        {
+            "node_id": str(row.node_id),
+            "node_path": row.node_path,
+            "term": row.term.replace("\n", " ").strip(),
+        }
+        for row in rows
+    ]
+    return _render_table(
+        table_rows,
+        columns=[
+            ("node_id", "id", 4),
+            ("node_path", "node", 18),
+            ("term", "term", 36),
+        ],
+    )
+
+
 def _export_review_json(*, sqlite_db_path: Path, output_path: Path):
     if export_review_json is None:
         msg = "export-review-json is unavailable because pdfzx.review is not installed"
@@ -401,13 +449,19 @@ def _filter_document_sha256s(
     *,
     require_digital: bool,
     require_toc: bool,
+    exclude_path_keywords: list[str] | None = None,
 ) -> list[str]:
+    keywords = [keyword.lower() for keyword in exclude_path_keywords or []]
     filtered = []
     for sha256 in sha256s:
         record = registry.documents[sha256]
         if require_digital and not record.is_digital:
             continue
         if require_toc and not record.toc:
+            continue
+        if keywords and any(
+            keyword in path.lower() for path in record.paths for keyword in keywords
+        ):
             continue
         filtered.append(sha256)
     return filtered
@@ -434,10 +488,12 @@ def _add_partition_args(
         help="Override the partition chunk size for this run.",
     )
     parser.add_argument(
+        "--batch-offset",
         "--batch-index",
+        dest="batch_offset",
         type=int,
         default=0,
-        help="Zero-based shuffled batch index to start from.",
+        help="Zero-based shuffled batch offset to start from.",
     )
     parser.add_argument(
         "--batch-count",
@@ -446,21 +502,16 @@ def _add_partition_args(
         help=batch_count_help,
     )
     parser.add_argument(
-        "--bag",
-        nargs="*",
-        default=[],
-        help="Optional taxonomy bag items to pass into the accumulation stage.",
-    )
-    parser.add_argument(
-        "--bag-size-limit",
+        "--category-limit",
         type=int,
         default=10,
-        help="Maximum number of taxonomy bag items to request from the model.",
+        help="Maximum number of broad categories to request from the model.",
     )
     parser.add_argument(
-        "--carry-bag",
-        action="store_true",
-        help="Feed each accumulation batch's taxonomy_bag_after into the next batch.",
+        "--exclude-path-keyword",
+        action="append",
+        default=[],
+        help="Skip documents whose current path contains this keyword before partitioning.",
     )
 
 
@@ -599,52 +650,27 @@ def _partition_batches_from_sha256s(
     return chunk_items(ordered_sha256s, chunk_size=chunk_size)
 
 
-def _probe_partition_runs(  # noqa: PLR0913
-    config: ScanConfig,
-    *,
-    batch_index: int,
-    batch_count: int,
-    chunk_size: int,
-    bag: list[str],
-    bag_size_limit: int,
-    carry_bag: bool,
-) -> list[dict[str, object]]:
-    batches = _partition_batches(config, chunk_size=chunk_size)
-    return _probe_partition_runs_from_batches(
-        config,
-        batches=batches,
-        batch_index=batch_index,
-        batch_count=batch_count,
-        bag=bag,
-        bag_size_limit=bag_size_limit,
-        carry_bag=carry_bag,
-    )
-
-
 def _probe_partition_runs_from_batches(  # noqa: PLR0913
     config: ScanConfig,
     *,
     batches: list[list[str]],
-    batch_index: int,
+    batch_offset: int,
     batch_count: int,
-    bag: list[str],
-    bag_size_limit: int,
-    carry_bag: bool,
+    category_limit: int,
 ) -> list[dict[str, object]]:
     if batch_count <= 0:
         msg = "batch_count must be greater than 0"
         raise ValueError(msg)
-    end_batch_index = batch_index + batch_count - 1
-    if batch_index < 0 or end_batch_index >= len(batches):
+    end_batch_index = batch_offset + batch_count - 1
+    if batch_offset < 0 or end_batch_index >= len(batches):
         msg = (
-            f"batch range out of range: {batch_index}..{end_batch_index} "
+            f"batch range out of range: {batch_offset}..{end_batch_index} "
             f"(available: 0..{max(len(batches) - 1, 0)})"
         )
         raise ValueError(msg)
     registry = SqliteStorage(config.sqlite3_db_path).load()
-    current_bag = list(bag)
     runs: list[dict[str, object]] = []
-    for current_batch_index in range(batch_index, batch_index + batch_count):
+    for current_batch_index in range(batch_offset, batch_offset + batch_count):
         batch_sha256s = batches[current_batch_index]
         chunk_documents = [
             build_sampled_document_summary(registry.documents[sha256]) for sha256 in batch_sha256s
@@ -652,8 +678,7 @@ def _probe_partition_runs_from_batches(  # noqa: PLR0913
         result = propose_taxonomy_bags(
             batch_index=current_batch_index,
             chunk_documents=chunk_documents,
-            taxonomy_bag_before=current_bag,
-            bag_size_limit=bag_size_limit,
+            category_limit=category_limit,
             online_features=config.online_features,
             openai_api_key=config.openai_api_key,
             openai_model=config.openai_model,
@@ -667,17 +692,7 @@ def _probe_partition_runs_from_batches(  # noqa: PLR0913
                 "parsed_response": result.parsed_response,
             }
         )
-        if carry_bag:
-            current_bag = result.parsed_response.get("taxonomy_bag_after", [])
     return runs
-
-
-def _candidate_counts_from_runs(runs: list[dict[str, object]]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for run in runs:
-        for item in run.get("parsed_response", {}).get("taxonomy_bag_after", []):
-            counts[item] = counts.get(item, 0) + 1
-    return counts
 
 
 def _bootstrap_taxonomy_root(sqlite_db_path: Path) -> dict[str, object]:
@@ -712,14 +727,20 @@ def _partition_generalize_payload(  # noqa: PLR0913
     sha256s: list[str],
     node_path: str | None,
     chunk_size: int,
-    batch_index: int,
+    batch_offset: int,
     batch_count: int | None,
-    bag: list[str],
-    bag_size_limit: int,
-    carry_bag: bool,
+    category_limit: int,
+    exclude_path_keywords: list[str],
 ) -> dict[str, object]:
-    batches = _partition_batches_from_sha256s(
+    filtered_sha256s = _filter_document_sha256s(
+        SqliteStorage(config.sqlite3_db_path).load(),
         sha256s,
+        require_digital=False,
+        require_toc=False,
+        exclude_path_keywords=exclude_path_keywords,
+    )
+    batches = _partition_batches_from_sha256s(
+        filtered_sha256s,
         seed=config.partition_seed,
         chunk_size=chunk_size,
     )
@@ -728,30 +749,30 @@ def _partition_generalize_payload(  # noqa: PLR0913
             "node_path": node_path,
             "seed": config.partition_seed,
             "chunk_size": chunk_size,
-            "batch_index": batch_index,
+            "batch_offset": batch_offset,
             "batch_count": batch_count,
-            "carry_bag": carry_bag,
             "node_document_count": len(sha256s),
+            "filtered_document_count": len(filtered_sha256s),
+            "exclude_path_keywords": exclude_path_keywords,
             "runs": [],
-            "candidate_counts": {},
+            "proposals": [],
         }
     effective_batch_count = batch_count
     if effective_batch_count is None:
-        effective_batch_count = len(batches) - batch_index
+        effective_batch_count = len(batches) - batch_offset
     runs = _probe_partition_runs_from_batches(
         config,
         batches=batches,
-        batch_index=batch_index,
+        batch_offset=batch_offset,
         batch_count=effective_batch_count,
-        bag=bag,
-        bag_size_limit=bag_size_limit,
-        carry_bag=carry_bag,
+        category_limit=category_limit,
     )
-    candidate_counts = _candidate_counts_from_runs(runs)
+    proposals = [
+        TaxonomyPartitionGeneralizeProposal.model_validate(run["parsed_response"]) for run in runs
+    ]
     result = generalize_taxonomy_bag(
-        taxonomy_bag_before=list(candidate_counts),
-        candidate_counts=candidate_counts,
-        bag_size_limit=bag_size_limit,
+        proposals=proposals,
+        category_limit=category_limit,
         online_features=config.online_features,
         openai_api_key=config.openai_api_key,
         openai_model=config.openai_model,
@@ -760,12 +781,13 @@ def _partition_generalize_payload(  # noqa: PLR0913
         "node_path": node_path,
         "seed": config.partition_seed,
         "chunk_size": chunk_size,
-        "batch_index": batch_index,
+        "batch_offset": batch_offset,
         "batch_count": effective_batch_count,
-        "carry_bag": carry_bag,
         "node_document_count": len(sha256s),
+        "filtered_document_count": len(filtered_sha256s),
+        "exclude_path_keywords": exclude_path_keywords,
         "runs": runs,
-        "candidate_counts": candidate_counts,
+        "proposals": [proposal.model_dump(mode="json") for proposal in proposals],
         "generalize_prompt_input": result.prompt_input,
         "generalize_parsed_response": result.parsed_response,
     }
@@ -967,11 +989,16 @@ def _run_taxonomy_assignments(  # noqa: PLR0913,PLR0915
         with Session(engine) as session:
             repo = TaxonomyTreeRepository(session)
             def persist_result(sha256: str, result) -> None:
-                assigned_child_id = child_id_by_name.get(result.parsed_response["assigned_child"])
-                if assigned_child_id is None:
+                assigned_child_name = result.parsed_response["assigned_child"]
+                assigned_child_id = (
+                    None
+                    if assigned_child_name is None
+                    else child_id_by_name.get(assigned_child_name)
+                )
+                if assigned_child_name is not None and assigned_child_id is None:
                     msg = (
                         "LLM assignment returned an unknown child label after validation: "
-                        f"{result.parsed_response['assigned_child']}"
+                        f"{assigned_child_name}"
                     )
                     raise ValueError(msg)
                 repo.upsert_assignment(
@@ -1139,6 +1166,7 @@ def _persist_partition_children(
     *,
     node_path: str,
     child_names: list[str],
+    topic_terms_by_child: dict[str, list[str]] | None = None,
 ) -> dict[str, object]:
     engine = create_sqlite_engine(sqlite_db_path)
     try:
@@ -1159,7 +1187,17 @@ def _persist_partition_children(
                 )
                 for name in child_names
             ]
-            child_payload = [{"id": child.id, "path": child.path} for child in children]
+            child_payload = []
+            for child in children:
+                terms = [] if topic_terms_by_child is None else topic_terms_by_child.get(child.name, [])
+                topic_term_count = repo.replace_topic_terms(node_id=child.id, terms=terms)
+                child_payload.append(
+                    {
+                        "id": child.id,
+                        "path": child.path,
+                        "topic_term_count": topic_term_count,
+                    }
+                )
             session.commit()
     finally:
         engine.dispose()
@@ -1253,12 +1291,12 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
         "probe-taxonomy-partition",
         parents=[_base_parser(default_config)],
         add_help=False,
-        help="Probe the taxonomy-partition prompt against one shuffled batch.",
+        help="Probe the taxonomy-partition prompt against one node's shuffled batches.",
     )
     _add_partition_args(
         partition_probe_parser,
         default_chunk_size=default_config.partition_chunk_size,
-        node_path_help=None,
+        node_path_help="Taxonomy node path to probe.",
         default_batch_count=1,
         batch_count_help=(
             "Number of consecutive shuffled batches to accumulate before "
@@ -1274,7 +1312,7 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
     _add_partition_args(
         partition_generalize_parser,
         default_chunk_size=default_config.partition_chunk_size,
-        node_path_help=None,
+        node_path_help="Taxonomy node path to probe.",
         default_batch_count=1,
         batch_count_help=(
             "Number of consecutive shuffled batches to accumulate before "
@@ -1406,6 +1444,12 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
         default=0,
         help="Start offset into the node's assignment rows.",
     )
+    show_assignments_parser.add_argument(
+        "--status",
+        choices=["pending", "applied", "rejected", "manual_touched"],
+        default=None,
+        help="Only show assignment rows with this status.",
+    )
     apply_assignments_parser = subparsers.add_parser(
         "apply-taxonomy-assignments",
         parents=[_base_parser(default_config)],
@@ -1463,6 +1507,29 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
         type=int,
         default=0,
         help="Start offset into the node's current document memberships.",
+    )
+    node_terms_parser = subparsers.add_parser(
+        "show-taxonomy-node-terms",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help="Display one taxonomy node's narrower review terms.",
+    )
+    node_terms_parser.add_argument(
+        "--node-path",
+        default=None,
+        help="Optional taxonomy node path whose narrower review terms will be displayed.",
+    )
+    node_terms_parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Maximum number of node terms to display.",
+    )
+    node_terms_parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="Start offset into the node's narrower terms.",
     )
     subparsers.add_parser(
         "bootstrap-taxonomy-root",
@@ -1551,18 +1618,23 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
             sha256s=node_sha256s,
             node_path=args.node_path,
             chunk_size=args.chunk_size,
-            batch_index=args.batch_index,
+            batch_offset=args.batch_offset,
             batch_count=args.batch_count,
-            bag=args.bag,
-            bag_size_limit=args.bag_size_limit,
-            carry_bag=args.carry_bag,
+            category_limit=args.category_limit,
+            exclude_path_keywords=args.exclude_path_keyword,
         )
-        child_names = payload.get("generalize_parsed_response", {}).get("taxonomy_bag_after", [])
+        child_names = payload.get("generalize_parsed_response", {}).get("categories", [])
         if child_names:
+            topic_terms_by_child = {
+                item.get("category"): item.get("topics", [])
+                for item in payload.get("generalize_parsed_response", {}).get("supporting", [])
+                if isinstance(item, dict) and isinstance(item.get("category"), str)
+            }
             payload["persisted_children"] = _persist_partition_children(
                 config.sqlite3_db_path,
                 node_path=args.node_path,
                 child_names=child_names,
+                topic_terms_by_child=topic_terms_by_child,
             )
         _emit_json(payload)
         return 0
@@ -1598,6 +1670,7 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
             _show_taxonomy_assignments(
                 config.sqlite3_db_path,
                 node_path=args.node_path,
+                status=args.status,
                 limit=args.limit,
                 offset=args.offset,
             )
@@ -1626,43 +1699,92 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
             )
         )
         return 0
+    if args.command == "show-taxonomy-node-terms":
+        _emit_text(
+            _show_taxonomy_node_terms(
+                config.sqlite3_db_path,
+                node_path=args.node_path,
+                limit=args.limit,
+                offset=args.offset,
+            )
+        )
+        return 0
     if args.command == "probe-taxonomy-partition":
-        batches = _partition_batches(config, chunk_size=args.chunk_size)
-        if not batches:
-            _emit_json({"batch_index": args.batch_index, "batch_size": 0, "batch_sha256s": []})
+        bootstrap_result, node_sha256s = _ensure_taxonomy_node(
+            config.sqlite3_db_path,
+            node_path=args.node_path,
+        )
+        if bootstrap_result is not None:
+            _emit_json(bootstrap_result)
             return 0
-        runs = _probe_partition_runs(
-            config,
-            batch_index=args.batch_index,
-            batch_count=args.batch_count,
+        assert node_sha256s is not None
+        filtered_sha256s = _filter_document_sha256s(
+            SqliteStorage(config.sqlite3_db_path).load(),
+            node_sha256s,
+            require_digital=False,
+            require_toc=False,
+            exclude_path_keywords=args.exclude_path_keyword,
+        )
+        batches = _partition_batches_from_sha256s(
+            filtered_sha256s,
+            seed=config.partition_seed,
             chunk_size=args.chunk_size,
-            bag=args.bag,
-            bag_size_limit=args.bag_size_limit,
-            carry_bag=args.carry_bag,
+        )
+        if not batches:
+            _emit_json(
+                {
+                    "node_path": args.node_path,
+                    "seed": config.partition_seed,
+                    "chunk_size": args.chunk_size,
+                    "batch_offset": args.batch_offset,
+                    "batch_count": args.batch_count,
+                    "node_document_count": len(node_sha256s),
+                    "filtered_document_count": 0,
+                    "exclude_path_keywords": args.exclude_path_keyword,
+                    "runs": [],
+                }
+            )
+            return 0
+        runs = _probe_partition_runs_from_batches(
+            config,
+            batches=batches,
+            batch_offset=args.batch_offset,
+            batch_count=args.batch_count,
+            category_limit=args.category_limit,
         )
         _emit_json(
             {
+                "node_path": args.node_path,
                 "seed": config.partition_seed,
                 "chunk_size": args.chunk_size,
-                "batch_index": args.batch_index,
+                "batch_offset": args.batch_offset,
                 "batch_count": args.batch_count,
-                "carry_bag": args.carry_bag,
+                "node_document_count": len(node_sha256s),
+                "filtered_document_count": len(filtered_sha256s),
+                "exclude_path_keywords": args.exclude_path_keyword,
                 "runs": runs,
             }
         )
         return 0
     if args.command == "probe-taxonomy-partition-generalize":
+        bootstrap_result, node_sha256s = _ensure_taxonomy_node(
+            config.sqlite3_db_path,
+            node_path=args.node_path,
+        )
+        if bootstrap_result is not None:
+            _emit_json(bootstrap_result)
+            return 0
+        assert node_sha256s is not None
         _emit_json(
             _partition_generalize_payload(
                 config,
-                sha256s=list_document_sha256s(config.sqlite3_db_path),
-                node_path=None,
+                sha256s=node_sha256s,
+                node_path=args.node_path,
                 chunk_size=args.chunk_size,
-                batch_index=args.batch_index,
+                batch_offset=args.batch_offset,
                 batch_count=args.batch_count,
-                bag=args.bag,
-                bag_size_limit=args.bag_size_limit,
-                carry_bag=args.carry_bag,
+                category_limit=args.category_limit,
+                exclude_path_keywords=args.exclude_path_keyword,
             )
         )
         return 0

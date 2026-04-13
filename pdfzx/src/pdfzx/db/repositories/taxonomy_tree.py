@@ -14,6 +14,7 @@ from pdfzx.db.models import Document
 from pdfzx.db.models import TaxonomyAssignment
 from pdfzx.db.models import TaxonomyNode
 from pdfzx.db.models import TaxonomyNodeDocument
+from pdfzx.db.models import TaxonomyNodeTopicTerm
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +45,15 @@ class TaxonomyNodeDocumentView:
     node_path: str
     sha256: str
     document_path: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class TaxonomyNodeTermView:
+    """Readable narrower topic term row for one taxonomy node."""
+
+    node_id: int
+    node_path: str
+    term: str
 
 
 class TaxonomyTreeRepository:
@@ -221,6 +231,51 @@ class TaxonomyTreeRepository:
         )
         return list(self._session.scalars(stmt))
 
+    def replace_topic_terms(self, *, node_id: int, terms: list[str]) -> int:
+        """Replace the current narrower topic terms for one taxonomy node."""
+        normalized_terms = sorted({term.strip() for term in terms if term.strip()})
+        self._session.execute(
+            delete(TaxonomyNodeTopicTerm).where(TaxonomyNodeTopicTerm.node_id == node_id)
+        )
+        if normalized_terms:
+            self._session.add_all(
+                TaxonomyNodeTopicTerm(node_id=node_id, term=term) for term in normalized_terms
+            )
+        self._session.flush()
+        return len(normalized_terms)
+
+    def list_topic_terms(self, *, node_id: int) -> list[str]:
+        """Return sorted narrower topic terms attached to one taxonomy node."""
+        stmt = (
+            select(TaxonomyNodeTopicTerm.term)
+            .where(TaxonomyNodeTopicTerm.node_id == node_id)
+            .order_by(TaxonomyNodeTopicTerm.term.asc())
+        )
+        return list(self._session.scalars(stmt))
+
+    def list_node_term_views(
+        self,
+        *,
+        node_id: int | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[TaxonomyNodeTermView]:
+        """Return readable narrower topic term rows, optionally for one node."""
+        stmt = (
+            select(TaxonomyNode.id, TaxonomyNode.path, TaxonomyNodeTopicTerm.term)
+            .join(TaxonomyNodeTopicTerm, TaxonomyNode.id == TaxonomyNodeTopicTerm.node_id)
+            .order_by(TaxonomyNode.path.asc(), TaxonomyNodeTopicTerm.term.asc())
+            .offset(offset)
+        )
+        if node_id is not None:
+            stmt = stmt.where(TaxonomyNode.id == node_id)
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return [
+            TaxonomyNodeTermView(node_id=node_id, node_path=node_path, term=term)
+            for node_id, node_path, term in self._session.execute(stmt)
+        ]
+
     def upsert_assignment(  # noqa: PLR0913
         self,
         *,
@@ -269,6 +324,7 @@ class TaxonomyTreeRepository:
         self,
         *,
         node_id: int,
+        status: str | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[TaxonomyAssignmentView]:
@@ -284,6 +340,8 @@ class TaxonomyTreeRepository:
             .order_by(TaxonomyAssignment.sha256.asc())
             .offset(offset)
         )
+        if status is not None:
+            stmt = stmt.where(TaxonomyAssignment.status == status)
         if limit is not None:
             stmt = stmt.limit(limit)
         rows = []
@@ -401,6 +459,12 @@ class TaxonomyTreeRepository:
                 excluded += 1
                 continue
             self.add_documents(node_id=assignment.assigned_child_id, sha256s=[assignment.sha256])
+            self._session.execute(
+                delete(TaxonomyNodeDocument).where(
+                    TaxonomyNodeDocument.node_id == node_id,
+                    TaxonomyNodeDocument.sha256 == assignment.sha256,
+                )
+            )
             assignment.status = "applied"
             assignment.updated_at = datetime.now(tz=UTC).replace(tzinfo=None)
             applied += 1

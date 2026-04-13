@@ -1,4 +1,4 @@
-"""Prompt contract for final taxonomy-partition generalization."""
+"""Prompt contract for merging taxonomy proposal JSON results."""
 
 from __future__ import annotations
 
@@ -7,67 +7,69 @@ from pydantic import Field
 
 from pdfzx.prompts._shared import build_system_prompt
 from pdfzx.prompts._shared import dump_prompt_input
+from pdfzx.prompts.taxonomy_partition_proposal import TaxonomyPartitionSupportingGroup
 
 TAXONOMY_PARTITION_GENERALIZE_WORKFLOW = "taxonomy_partition_generalize"
-TAXONOMY_PARTITION_GENERALIZE_PROMPT_VERSION = "v2"
+TAXONOMY_PARTITION_GENERALIZE_PROMPT_VERSION = "v8"
 
 TAXONOMY_PARTITION_GENERALIZE_SYSTEM_PROMPT = build_system_prompt(
-    role="You are consolidating accumulated taxonomy candidates into a final parent-layer bag.",
-    input_scope=(
-        "an accumulated taxonomy bag gathered from multiple batches, plus optional "
-        "candidate counts and the current bag size limit"
-    ),
+    role="You are summarizing and merging multiple taxonomy JSON proposals into one final result.",
+    input_scope="proposal JSON results and a maximum category count",
     goals=[
-        "collapse overlapping or duplicate categories into a compact final bag",
-        "generalize narrow labels upward when a broader parent category is more stable",
-        "produce parent-layer categories that can cover future batches, not just one local chunk",
-        "produce sibling categories that are as non-overlapping as reasonably possible",
+        "merge similar broad subject categories sensibly",
+        "return one final set of broad categories with supporting topics",
     ],
     evidence_priority=[
-        "repeated category names across accumulated candidates",
-        "category counts if provided",
-        "broader subject umbrellas over narrow subtopics or file types",
+        "repeated broad categories across proposals",
+        "supporting topics grouped under each category",
+        "stable, recognizable subject areas over noisy wording differences",
     ],
     rules=[
-        "return at most `bag_size_limit` taxonomy bags",
-        "prefer broad stable umbrellas over narrow descendants",
-        "merge near-duplicates and sibling categories whenever a reasonable parent exists",
+        "return JSON with `categories` and `supporting`",
+        "return broad categories only",
+        "use supporting topics as evidence when merging similar categories",
+        "do not return duplicate or near-duplicate categories",
+        "if `category_limit` is smaller, choose broader categories",
         (
-            "do not return both a broad parent and its narrow descendant in the same bag, "
-            "for example Physics together with Quantum Mechanics or Electromagnetics"
+            "do not keep a weak standalone category when its evidence is sparse and it can be "
+            "merged into a stronger neighboring category"
         ),
         (
-            "if two labels would cover heavily overlapping documents, keep only the broader "
-            "or more stable parent label"
+            "fold small hobby, maker, or miscellaneous edge pockets into the nearest stronger "
+            "technical category when that fit is reasonable"
         ),
-        (
-            "the final bag should contain sibling categories, not mixed hierarchy levels or "
-            "specialized subtopics beside their parent"
-        ),
-        "use fewer than `bag_size_limit` items when a smaller broad set is cleaner",
-        (
-            "avoid file-type labels such as Solutions, Homework, and Exams "
-            "unless document type is the main organizing principle"
-        ),
-        "include Others when a few minority items do not justify their own stable parent category",
-        "each taxonomy bag item must be a short folder-safe label in title case with spaces only",
+        "return at most `category_limit` categories",
+        "keep category names short and folder-safe",
         "keep output strictly as JSON matching the requested schema",
+        (
+            'example: {"categories": ["Computer Science", "Mathematics"], '
+            '"supporting": [{"category": "Computer Science", '
+            '"topics": ["Data Structures and Algorithms", "Networking"]}, '
+            '{"category": "Mathematics", "topics": ["Linear Algebra", "Calculus"]}]}'
+        ),
     ],
 )
 
 
-class TaxonomyPartitionGeneralizePromptInput(BaseModel):
-    """Prompt input for final taxonomy-partition generalization."""
+class TaxonomyPartitionGeneralizeProposal(BaseModel):
+    """One proposal JSON result to be merged."""
 
-    bag_size_limit: int = 10
-    taxonomy_bag_before: list[str] = Field(default_factory=list)
-    candidate_counts: dict[str, int] = Field(default_factory=dict)
+    categories: list[str] = Field(default_factory=list)
+    supporting: list[TaxonomyPartitionSupportingGroup] = Field(default_factory=list)
+
+
+class TaxonomyPartitionGeneralizePromptInput(BaseModel):
+    """Prompt input for final taxonomy-partition merging."""
+
+    category_limit: int = 10
+    proposals: list[TaxonomyPartitionGeneralizeProposal] = Field(default_factory=list)
 
 
 class TaxonomyPartitionGeneralizeResponse(BaseModel):
-    """Structured output for final taxonomy-partition generalization."""
+    """Structured output for final taxonomy-partition merging."""
 
-    taxonomy_bag_after: list[str] = Field(default_factory=list, max_length=10)
+    categories: list[str] = Field(default_factory=list, max_length=10)
+    supporting: list[TaxonomyPartitionSupportingGroup] = Field(default_factory=list)
 
 
 def build_taxonomy_partition_generalize_user_prompt(

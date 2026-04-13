@@ -189,6 +189,9 @@ class TaxonomyNode(Base):
     documents: Mapped[list[TaxonomyNodeDocument]] = relationship(
         back_populates="node", cascade="all, delete-orphan"
     )
+    topic_terms: Mapped[list[TaxonomyNodeTopicTerm]] = relationship(
+        back_populates="node", cascade="all, delete-orphan"
+    )
     outgoing_assignments: Mapped[list[TaxonomyAssignment]] = relationship(
         foreign_keys="TaxonomyAssignment.node_id",
         back_populates="node",
@@ -210,6 +213,17 @@ class TaxonomyNodeDocument(Base):
 
     node: Mapped[TaxonomyNode] = relationship(back_populates="documents")
     document: Mapped[Document] = relationship(back_populates="taxonomy_memberships")
+
+
+class TaxonomyNodeTopicTerm(Base):
+    """Reviewable narrower topic term attached to one taxonomy node."""
+
+    __tablename__ = "taxonomy_node_topic_terms"
+
+    node_id: Mapped[int] = mapped_column(ForeignKey("taxonomy_nodes.id"), primary_key=True)
+    term: Mapped[str] = mapped_column(String(256), primary_key=True)
+
+    node: Mapped[TaxonomyNode] = relationship(back_populates="topic_terms")
 
 
 class TaxonomyAssignment(Base):

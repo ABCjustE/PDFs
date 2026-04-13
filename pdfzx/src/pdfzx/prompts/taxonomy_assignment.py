@@ -14,7 +14,7 @@ from pdfzx.models import DocumentRecord
 from pdfzx.prompts._shared import build_system_prompt
 
 TAXONOMY_ASSIGNMENT_WORKFLOW = "taxonomy_assignment"
-TAXONOMY_ASSIGNMENT_PROMPT_VERSION = "v1"
+TAXONOMY_ASSIGNMENT_PROMPT_VERSION = "v4"
 
 TAXONOMY_ASSIGNMENT_SYSTEM_PROMPT = build_system_prompt(
     role="You are assigning one document to one existing child taxonomy label.",
@@ -22,20 +22,30 @@ TAXONOMY_ASSIGNMENT_SYSTEM_PROMPT = build_system_prompt(
         "a parent taxonomy node, its existing child labels, and one compact document summary"
     ),
     goals=[
-        "choose exactly one existing child label for the document",
+        "either assign the document to one existing child label or keep it in the current node",
         "prefer the broadest fitting child at the current layer",
-        "avoid assigning to a narrow subfield if a broader sibling already covers it",
+        "prefer the document's apparent topic over literal keywords in the title",
     ],
     evidence_priority=[
-        "document file name and normalised name",
         "current path hints",
         "metadata title",
+        "document file name and normalised name",
     ],
     rules=[
-        "return exactly one `assigned_child` chosen from `child_labels`",
+        "return `assignment_action` as either `child` or `stay`",
+        (
+            "if `assignment_action` is `child`, return exactly one `assigned_child` "
+            "chosen from `child_labels`"
+        ),
+        "if `assignment_action` is `stay`, return `assigned_child` as null",
         "do not invent a new label",
+        "treat the existing current_path as a strong prior for the document's topical area",
+        (
+            "do not assign by filename keyword alone when current_path or metadata_title "
+            "indicates a different subject"
+        ),
         "prefer broad current-layer labels over implied deeper subtopics",
-        "use `Others` when none of the other child labels fit confidently",
+        "prefer `stay` over forcing a weak child assignment",
         "set `confidence` to one of: high, medium, low",
         "set `reasoning_summary` to a short non-empty evidence-based explanation",
         "keep output strictly as JSON matching the requested schema",
@@ -64,7 +74,8 @@ class TaxonomyAssignmentPromptInput(BaseModel):
 class TaxonomyAssignmentResponse(BaseModel):
     """Structured output for one taxonomy assignment decision."""
 
-    assigned_child: str
+    assignment_action: Literal["child", "stay"]
+    assigned_child: str | None = None
     confidence: Literal["high", "medium", "low"]
     reasoning_summary: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 

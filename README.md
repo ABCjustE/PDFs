@@ -93,9 +93,11 @@ Notes:
   - run the ToC-review prompt against one document in SQLite
   - judge ToC validity, topical relevance, and likely preface page
 - `probe-taxonomy-partition`
-  - run the experimental taxonomy-partition prompt against one or more shuffled batches
+  - run the proposal-stage taxonomy partition prompt against one taxonomy node's shuffled batches
+  - inspect batch JSON with `categories` and `supporting`
 - `probe-taxonomy-partition-generalize`
-  - run the full probe flow through final generalization
+  - run the node-scoped proposal plus generalize flow
+  - inspect the merged final JSON with `categories` and `supporting`
 - `probe-taxonomy-assign`
   - probe one-by-one document assignment under an existing taxonomy node
 - `run-taxonomy-partition`
@@ -106,8 +108,9 @@ Notes:
   - persists `pending` `taxonomy_assignments` rows
 - `show-taxonomy-assignments`
   - display readable joined assignment rows for one taxonomy node
+  - supports filtering by assignment status
 - `apply-taxonomy-assignments`
-  - apply pending high-confidence assignment rows into child node memberships
+  - move pending high-confidence assignment rows from a parent node into child node memberships
 - `show-taxonomy-node-stats`
   - display direct document counts grouped by taxonomy node
 - `show-taxonomy-node-documents`
@@ -218,31 +221,31 @@ pdfzx/.venv/bin/python client.py probe-toc-review --sha256 <sha256>
 Probe one shuffled taxonomy-partition batch:
 
 ```bash
-pdfzx/.venv/bin/python client.py probe-taxonomy-partition
+pdfzx/.venv/bin/python client.py probe-taxonomy-partition --node-path Root
 ```
 
 Probe three consecutive shuffled batches with batch size 20:
 
 ```bash
-pdfzx/.venv/bin/python client.py probe-taxonomy-partition --chunk-size 20 --batch-index 0 --batch-count 3
-```
-
-Probe three consecutive shuffled batches and carry the bag forward:
-
-```bash
-pdfzx/.venv/bin/python client.py probe-taxonomy-partition --chunk-size 20 --batch-index 0 --batch-count 3 --carry-bag
+pdfzx/.venv/bin/python client.py probe-taxonomy-partition --node-path Root --chunk-size 20 --batch-offset 0 --batch-count 3
 ```
 
 Probe final taxonomy generalization over shuffled batches:
 
 ```bash
-pdfzx/.venv/bin/python client.py probe-taxonomy-partition-generalize --chunk-size 500 --batch-index 0 --batch-count 7
+pdfzx/.venv/bin/python client.py probe-taxonomy-partition-generalize --node-path Root --chunk-size 500 --batch-offset 0 --batch-count 7
 ```
 
 Run taxonomy partitioning on the root node:
 
 ```bash
-pdfzx/.venv/bin/python client.py run-taxonomy-partition --node-path Root --chunk-size 500 --batch-index 0 --batch-count 7
+pdfzx/.venv/bin/python client.py run-taxonomy-partition --node-path Root --chunk-size 500 --batch-offset 0 --batch-count 7
+```
+
+Exclude manual path buckets during partition probing or runs:
+
+```bash
+pdfzx/.venv/bin/python client.py probe-taxonomy-partition --node-path Root --exclude-path-keyword HKUSTthings --exclude-path-keyword HKOI --exclude-path-keyword ait38 --exclude-path-keyword ff48
 ```
 
 Probe taxonomy assignment under the root node:
@@ -263,10 +266,16 @@ Show readable taxonomy assignment rows:
 pdfzx/.venv/bin/python client.py show-taxonomy-assignments --node-path Root --limit 50 --offset 0
 ```
 
+Show only pending taxonomy assignment rows:
+
+```bash
+pdfzx/.venv/bin/python client.py show-taxonomy-assignments --node-path Root --status pending --limit 50 --offset 0
+```
+
 Apply pending high-confidence assignments while excluding manual path buckets:
 
 ```bash
-pdfzx/.venv/bin/python client.py apply-taxonomy-assignments --node-path Root --minimum-confidence high --exclude-path-keyword HKUSTthings --exclude-path-keyword ait38 --exclude-path-keyword ff48
+pdfzx/.venv/bin/python client.py apply-taxonomy-assignments --node-path Root --minimum-confidence high --exclude-path-keyword uni --exclude-path-keyword ff --exclude-path-keyword ait --exclude-path-keyword hkoi
 ```
 
 Show direct document counts grouped by taxonomy node:
