@@ -10,11 +10,11 @@ from pdfzx.prompts._shared import dump_prompt_input
 from pdfzx.prompts.taxonomy_partition_proposal import TaxonomyPartitionSupportingGroup
 
 TAXONOMY_PARTITION_GENERALIZE_WORKFLOW = "taxonomy_partition_generalize"
-TAXONOMY_PARTITION_GENERALIZE_PROMPT_VERSION = "v8"
+TAXONOMY_PARTITION_GENERALIZE_PROMPT_VERSION = "v9"
 
 TAXONOMY_PARTITION_GENERALIZE_SYSTEM_PROMPT = build_system_prompt(
     role="You are summarizing and merging multiple taxonomy JSON proposals into one final result.",
-    input_scope="proposal JSON results and a maximum category count",
+    input_scope="proposal JSON results, the current ancestor scope, and a maximum category count",
     goals=[
         "merge similar broad subject categories sensibly",
         "return one final set of broad categories with supporting topics",
@@ -27,6 +27,8 @@ TAXONOMY_PARTITION_GENERALIZE_SYSTEM_PROMPT = build_system_prompt(
     rules=[
         "return JSON with `categories` and `supporting`",
         "return broad categories only",
+        "treat `ancestor_names` as already-selected parent scope",
+        "do not return any name from `ancestor_names` as a final category",
         "use supporting topics as evidence when merging similar categories",
         "do not return duplicate or near-duplicate categories",
         "if `category_limit` is smaller, choose broader categories",
@@ -62,6 +64,7 @@ class TaxonomyPartitionGeneralizePromptInput(BaseModel):
     """Prompt input for final taxonomy-partition merging."""
 
     category_limit: int = 10
+    ancestor_names: list[str] = Field(default_factory=list)
     proposals: list[TaxonomyPartitionGeneralizeProposal] = Field(default_factory=list)
 
 

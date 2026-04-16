@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import as_completed
@@ -26,6 +27,8 @@ from pdfzx.models import TocEntry
 
 PromptInputT = TypeVar("PromptInputT", bound=BaseModel)
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
+_BATCH_MAX_RETRIES = 2
+_BATCH_RETRY_DELAY_SECONDS = 2.0
 
 
 class PromptWorkflowService(Protocol):
@@ -131,7 +134,7 @@ def probe_prompt_workflow(  # noqa: PLR0913
                     persisted=False,
                 )
 
-            response = (client or OpenAI(api_key=openai_api_key)).responses.parse(
+            response = (client or OpenAI(api_key=openai_api_key, max_retries=0)).responses.parse(
                 model=openai_model,
                 instructions=workflow.system_prompt,
                 input=workflow.build_user_prompt(prompt_input_model),
@@ -212,7 +215,7 @@ def batch_prompt_workflow(  # noqa: C901,PLR0913,PLR0915
                 failures=[],
             )
 
-            openai_client = client or OpenAI(api_key=openai_api_key)
+            openai_client = client or OpenAI(api_key=openai_api_key, max_retries=0)
             pending_requests: list[_PendingBatchRequest[PromptInputT]] = []
             for document in documents:
                 record = _document_record_from_orm(document)
@@ -326,10 +329,7 @@ def _document_record_from_orm(document: Document) -> DocumentRecord:
     return DocumentRecord(
         sha256=document.sha256,
         md5=document.md5,
-        paths=[
-            path.rel_path
-            for path in sorted(document.paths, key=lambda item: item.rel_path)
-        ],
+        paths=[path.rel_path for path in sorted(document.paths, key=lambda item: item.rel_path)],
         file_name=document.file_name,
         normalised_name=document.normalised_name,
         metadata=PdfMetadata(
@@ -392,12 +392,7 @@ def _execute_batch_requests(
             try:
                 yield future.result()
             except Exception as exc:  # pragma: no cover - defensive fallback
-                yield (
-                    request.sha256,
-                    request.prompt_input_model,
-                    None,
-                    str(exc),
-                )
+                yield (request.sha256, request.prompt_input_model, None, str(exc))
 
 
 def _run_prompt_request(
@@ -408,13 +403,21 @@ def _run_prompt_request(
     request: _PendingBatchRequest[PromptInputT],
 ) -> tuple[str, PromptInputT, ResponseT | None, str | None]:
     """Execute one LLM request and return the parsed result or error string."""
+    attempts = _BATCH_MAX_RETRIES + 1
     try:
-        response = openai_client.responses.parse(
-            model=openai_model,
-            instructions=workflow.system_prompt,
-            input=workflow.build_user_prompt(request.prompt_input_model),
-            text_format=workflow.response_model,
-        )
+        for attempt in range(attempts):
+            try:
+                response = openai_client.responses.parse(
+                    model=openai_model,
+                    instructions=workflow.system_prompt,
+                    input=workflow.build_user_prompt(request.prompt_input_model),
+                    text_format=workflow.response_model,
+                )
+                break
+            except Exception:
+                if attempt + 1 >= attempts:
+                    raise
+                time.sleep(_BATCH_RETRY_DELAY_SECONDS * (2**attempt))
         parsed = _require_parsed_response(response.output_parsed)
     except Exception as exc:
         return request.sha256, request.prompt_input_model, None, str(exc)

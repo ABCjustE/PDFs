@@ -11,13 +11,13 @@ from pdfzx.models import DocumentRecord
 from pdfzx.prompts._shared import build_system_prompt
 
 TAXONOMY_PARTITION_PROPOSAL_WORKFLOW = "taxonomy_partition_proposal"
-TAXONOMY_PARTITION_PROPOSAL_PROMPT_VERSION = "v2"
+TAXONOMY_PARTITION_PROPOSAL_PROMPT_VERSION = "v3"
 
 TAXONOMY_PARTITION_PROPOSAL_SYSTEM_PROMPT = build_system_prompt(
     role="You are identifying the main subject clusters in this sampled list of documents.",
     input_scope=(
-        "a sampled batch of document names, paths, short titles, and a maximum "
-        "category count"
+        "a sampled batch of document names, paths, short titles, the current "
+        "ancestor scope, and a maximum category count"
     ),
     goals=[
         "identify the main broad subject categories in this sampled list",
@@ -33,6 +33,9 @@ TAXONOMY_PARTITION_PROPOSAL_SYSTEM_PROMPT = build_system_prompt(
             "prefer Computer Science over narrower topics like Data Structures or Algorithm Design "
             "when both fit"
         ),
+        "treat `ancestor_names` as already-selected parent scope",
+        "do not return any name from `ancestor_names` as a new category",
+        "propose child categories that subdivide the current scope",
         "do not return narrow subtopics as categories",
         "use narrower topics only as supporting evidence",
         "return at most `category_limit` broad categories",
@@ -57,6 +60,7 @@ class TaxonomyPartitionProposalPromptInput(BaseModel):
 
     batch_index: int
     category_limit: int = 10
+    ancestor_names: list[str] = Field(default_factory=list)
     chunk_documents: list[SampledDocumentSummary] = Field(default_factory=list)
 
 
@@ -74,11 +78,7 @@ def build_taxonomy_partition_proposal_user_prompt(
     payload = prompt_input.model_dump(mode="json")
     # Keep sha256 in Python-side summaries for traceability, but do not send it to the model.
     payload["chunk_documents"] = [
-        {
-            key: value
-            for key, value in document.items()
-            if key != "sha256"
-        }
+        {key: value for key, value in document.items() if key != "sha256"}
         for document in payload["chunk_documents"]
     ]
     return json.dumps(payload, ensure_ascii=False, indent=2)

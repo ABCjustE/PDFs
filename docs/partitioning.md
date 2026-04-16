@@ -142,8 +142,9 @@ Assignment behavior:
 - assignment uses the node's existing child labels as allowed child targets
 - assignment also includes child topic terms to clarify similar child labels
 - the prompt may also decide a document should stay at the current node
-- `run-taxonomy-assign` writes `taxonomy_assignments` with `status="pending"` only for `child` decisions
-- `stay` decisions are returned in probe/run output but are not persisted as assignment rows
+- `run-taxonomy-assign` writes `taxonomy_assignments` with `status="pending"` for `child` decisions
+- `stay` decisions are also persisted so later runs skip them by default
+- persisted `stay` decisions use `status="rejected"` with no assigned child
 - `--force` re-requests and overwrites existing assignment rows
 - existing rows are skipped by default
 - `--output-ndjson` writes durable per-item progress

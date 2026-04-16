@@ -684,9 +684,16 @@ def _partition_batches_from_sha256s(
     return chunk_items(ordered_sha256s, chunk_size=chunk_size)
 
 
+def _taxonomy_ancestor_names(node_path: str | None) -> list[str]:
+    if not node_path:
+        return []
+    return [part.strip() for part in node_path.split("/") if part.strip()][1:]
+
+
 def _probe_partition_runs_from_batches(
     config: ScanConfig,
     *,
+    node_path: str | None,
     batches: list[list[str]],
     batch_offset: int,
     batch_count: int,
@@ -703,6 +710,7 @@ def _probe_partition_runs_from_batches(
         )
         raise ValueError(msg)
     registry = SqliteStorage(config.sqlite3_db_path).load()
+    ancestor_names = _taxonomy_ancestor_names(node_path)
     runs: list[dict[str, object]] = []
     for current_batch_index in range(batch_offset, batch_offset + batch_count):
         batch_sha256s = batches[current_batch_index]
@@ -714,6 +722,7 @@ def _probe_partition_runs_from_batches(
             batch_index=current_batch_index,
             chunk_documents=chunk_documents,
             category_limit=category_limit,
+            ancestor_names=ancestor_names,
             online_features=config.online_features,
             openai_api_key=config.openai_api_key,
             openai_model=config.openai_model,
@@ -797,6 +806,7 @@ def _partition_generalize_payload(  # noqa: PLR0913
         effective_batch_count = len(batches) - batch_offset
     runs = _probe_partition_runs_from_batches(
         config,
+        node_path=node_path,
         batches=batches,
         batch_offset=batch_offset,
         batch_count=effective_batch_count,
@@ -809,6 +819,7 @@ def _partition_generalize_payload(  # noqa: PLR0913
     result = generalize_taxonomy_bag(
         proposals=proposals,
         category_limit=category_limit,
+        ancestor_names=_taxonomy_ancestor_names(node_path),
         online_features=config.online_features,
         openai_api_key=config.openai_api_key,
         openai_model=config.openai_model,
@@ -1055,8 +1066,6 @@ def _run_taxonomy_assignments(  # noqa: C901,PLR0913,PLR0915
             repo = TaxonomyTreeRepository(session)
 
             def persist_result(sha256: str, result) -> None:
-                if result.parsed_response["assignment_action"] == "stay":
-                    return
                 assigned_child_name = result.parsed_response["assigned_child"]
                 assigned_child_id = (
                     None
@@ -1075,7 +1084,11 @@ def _run_taxonomy_assignments(  # noqa: C901,PLR0913,PLR0915
                     assigned_child_id=assigned_child_id,
                     confidence=result.parsed_response["confidence"],
                     reasoning_summary=result.parsed_response["reasoning_summary"],
-                    status="pending",
+                    status=(
+                        "pending"
+                        if result.parsed_response["assignment_action"] == "child"
+                        else "stay"
+                    ),
                 )
                 session.commit()
 
@@ -1115,9 +1128,7 @@ def _run_taxonomy_assignments(  # noqa: C901,PLR0913,PLR0915
                             },
                         )
                         continue
-                    persisted_now = (
-                        result.parsed_response["assignment_action"] == "child"
-                    )
+                    persisted_now = True
                     if persisted_now:
                         persisted += 1
                     results.append(
@@ -1195,9 +1206,7 @@ def _run_taxonomy_assignments(  # noqa: C901,PLR0913,PLR0915
                                 },
                             )
                             continue
-                        persisted_now = (
-                            result.parsed_response["assignment_action"] == "child"
-                        )
+                        persisted_now = True
                         if persisted_now:
                             persisted += 1
                         results.append(
@@ -1371,7 +1380,7 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
         "export-review-json",
         parents=[_base_parser(default_config)],
         add_help=False,
-        help="Export side-by-side review rows for current and suggested name/path data.",
+        help="(Suspended) Export side-by-side review rows for current and suggested name/path data.",
     )
     review_parser.add_argument(
         "--output",
@@ -1548,7 +1557,7 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
     )
     show_assignments_parser.add_argument(
         "--status",
-        choices=["pending", "applied", "rejected", "manual_touched"],
+        choices=["pending", "applied", "stay", "rejected", "manual_touched"],
         default=None,
         help="Only show assignment rows with this status.",
     )

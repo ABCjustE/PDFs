@@ -25,7 +25,7 @@ sys.modules[CLIENT_SPEC.name] = client
 CLIENT_SPEC.loader.exec_module(client)
 
 
-def test_run_taxonomy_assignments_does_not_persist_stay(monkeypatch, tmp_path) -> None:
+def test_run_taxonomy_assignments_persists_stay_status(monkeypatch, tmp_path) -> None:
     db_path = tmp_path / "db.sqlite3"
     pdf_root = tmp_path / "pdf_root"
     pdf_root.mkdir()
@@ -110,9 +110,9 @@ def test_run_taxonomy_assignments_does_not_persist_stay(monkeypatch, tmp_path) -
         output_ndjson=None,
     )
 
-    assert result["persisted"] == 0
+    assert result["persisted"] == 1
     assert result["failed"] == 0
-    assert result["results"][0]["persisted"] is False
+    assert result["results"][0]["persisted"] is True
     assert result["results"][0]["parsed_response"]["assignment_action"] == "stay"
 
     engine = create_sqlite_engine(db_path)
@@ -121,7 +121,10 @@ def test_run_taxonomy_assignments_does_not_persist_stay(monkeypatch, tmp_path) -
             repo = TaxonomyTreeRepository(session)
             root = repo.get_node_by_path(path="Root")
             assert root is not None
-            assert repo.list_assignments(node_id=root.id) == []
+            assignments = repo.list_assignments(node_id=root.id)
+            assert len(assignments) == 1
+            assert assignments[0].assigned_child_id is None
+            assert assignments[0].status == "stay"
     finally:
         engine.dispose()
 

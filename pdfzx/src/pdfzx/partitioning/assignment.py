@@ -21,10 +21,6 @@ class TaxonomyAssignmentResult:
     parsed_response: dict[str, object]
 
 
-def _is_rate_limit_error(exc: Exception) -> bool:
-    return exc.__class__.__name__ == "RateLimitError" or getattr(exc, "status_code", None) == 429
-
-
 def assign_taxonomy_child(  # noqa: PLR0913
     *,
     prompt_input: TaxonomyAssignmentPromptInput,
@@ -42,7 +38,7 @@ def assign_taxonomy_child(  # noqa: PLR0913
     if not openai_api_key:
         msg = "PDFZX_OPENAI_API_KEY is required for taxonomy assignment"
         raise ValueError(msg)
-    openai_client = client or OpenAI(api_key=openai_api_key)
+    openai_client = client or OpenAI(api_key=openai_api_key, max_retries=0)
     user_prompt = build_taxonomy_assignment_user_prompt(prompt_input)
     attempts = max_retries + 1
     last_error: Exception | None = None
@@ -57,7 +53,7 @@ def assign_taxonomy_child(  # noqa: PLR0913
             break
         except Exception as exc:
             last_error = exc
-            if not _is_rate_limit_error(exc) or attempt + 1 >= attempts:
+            if attempt + 1 >= attempts:
                 raise
             time.sleep(retry_delay_seconds * (2**attempt))
     else:
