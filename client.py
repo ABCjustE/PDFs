@@ -29,8 +29,10 @@ from pdfzx.config import DEFAULT_LLM_MAX_TOC_ENTRIES
 from pdfzx.config import DEFAULT_PARTITION_CHUNK_SIZE
 from pdfzx.config import DEFAULT_PARTITION_SEED
 from pdfzx.config import ScanConfig
+from pdfzx.db.queries import list_duplicate_documents
 from pdfzx.db.migration import migrate_json_to_sqlite
 from pdfzx.db.queries import list_document_sha256s
+from pdfzx.db.repositories import DocumentPathRepository
 from pdfzx.db.repositories import TaxonomyTreeRepository
 from pdfzx.db.session import create_sqlite_engine
 from pdfzx.llm_suggestion import batch_document_suggestion
@@ -224,6 +226,28 @@ def _append_ndjson(path: Path | None, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(f"{json.dumps(payload, ensure_ascii=False)}\n")
+
+
+def _read_rel_path_list(path: Path) -> list[str]:
+    return [
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
+def _normalize_pdf_rel_path(root: Path, rel_path: str) -> str:
+    candidate = (root / rel_path).resolve(strict=False)
+    resolved_root = root.resolve()
+    try:
+        normalized = candidate.relative_to(resolved_root).as_posix()
+    except ValueError as exc:
+        msg = f"Path escapes configured root: {rel_path}"
+        raise ValueError(msg) from exc
+    if not normalized.lower().endswith(".pdf"):
+        msg = f"Relative path is not a PDF: {rel_path}"
+        raise ValueError(msg)
+    return normalized
 
 
 class _RequestThrottle:
@@ -430,6 +454,94 @@ def _show_taxonomy_node_terms(
             ("node_path", "node", 18),
             ("term", "term", 36),
         ],
+    )
+
+
+def _show_duplicate_documents(
+    sqlite_db_path: Path,
+    *,
+    limit: int | None,
+    offset: int,
+) -> str:
+    rows = list_duplicate_documents(sqlite_db_path, limit=limit, offset=offset)
+    if not rows:
+        return "No duplicate documents found."
+    blocks: list[str] = []
+    for row in rows:
+        blocks.append(f"{row.file_name} ({row.path_count} paths)")
+        blocks.extend(f"  {path}" for path in row.rel_paths)
+    return "\n".join(blocks)
+
+
+def _delete_document_paths(
+    config: ScanConfig,
+    *,
+    rel_paths: list[str],
+    input_path: Path | None = None,
+) -> dict[str, object]:
+    normalized_rel_paths = [
+        _normalize_pdf_rel_path(config.root_path, item) for item in rel_paths
+    ]
+    engine = create_sqlite_engine(config.sqlite3_db_path)
+    results: list[dict[str, object]] = []
+    try:
+        with Session(engine) as session:
+            repo = DocumentPathRepository(session)
+            for rel_path in normalized_rel_paths:
+                absolute_path = (config.root_path / rel_path).resolve(strict=False)
+                db_sha256 = repo.get_sha256_by_rel_path(rel_path=rel_path)
+                file_exists = absolute_path.exists()
+                if file_exists and not absolute_path.is_file():
+                    msg = f"Path is not a file: {absolute_path}"
+                    raise ValueError(msg)
+                deleted = None
+                file_deleted = False
+                if db_sha256 is not None and file_exists:
+                    absolute_path.unlink()
+                    file_deleted = True
+                    deleted = repo.delete_by_rel_path(rel_path=rel_path)
+                results.append(
+                    {
+                        "rel_path": rel_path,
+                        "file_exists": file_exists,
+                        "db_exists": db_sha256 is not None,
+                        "file_deleted": file_deleted,
+                        "db_deleted": deleted is not None,
+                        "sha256": db_sha256 if deleted is None else deleted.sha256,
+                        "removed_scan_state": False if deleted is None else deleted.removed_scan_state,
+                        "remaining_paths": None if deleted is None else deleted.remaining_paths,
+                    }
+                )
+            session.commit()
+    finally:
+        engine.dispose()
+    payload: dict[str, object] = {
+        "requested_count": len(normalized_rel_paths),
+        "deleted_count": sum(1 for row in results if row["db_deleted"]),
+        "file_deleted_count": sum(1 for row in results if row["file_deleted"]),
+        "rows": results,
+    }
+    if input_path is not None:
+        payload["input_path"] = str(input_path.resolve())
+    return payload
+
+
+def _delete_document_paths_from_sources(
+    config: ScanConfig,
+    *,
+    input_path: Path | None,
+    rel_paths: list[str] | None,
+) -> dict[str, object]:
+    requested_rel_paths = [] if rel_paths is None else list(rel_paths)
+    if input_path is not None:
+        requested_rel_paths.extend(_read_rel_path_list(input_path))
+    if not requested_rel_paths:
+        msg = "Provide at least one --rel-path or an --input file."
+        raise ValueError(msg)
+    return _delete_document_paths(
+        config,
+        rel_paths=requested_rel_paths,
+        input_path=input_path,
     )
 
 
@@ -1381,6 +1493,42 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
         default=default_config.db_path,
         help="Target JSON export path.",
     )
+    delete_paths_parser = subparsers.add_parser(
+        "delete-document-paths",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help="Delete PDF files and matching document path rows from direct relative paths or an input file.",
+    )
+    delete_paths_parser.add_argument(
+        "--input",
+        type=Path,
+        default=None,
+        help="Text file containing one relative PDF path per line.",
+    )
+    delete_paths_parser.add_argument(
+        "--rel-path",
+        action="append",
+        default=None,
+        help="Relative PDF path to delete. Repeat to delete multiple paths.",
+    )
+    duplicate_docs_parser = subparsers.add_parser(
+        "show-duplicate-docs",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help="Display documents that currently have more than one document path.",
+    )
+    duplicate_docs_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Maximum number of duplicate-document rows to display. Default: all.",
+    )
+    duplicate_docs_parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="Start offset into the duplicate-document rows.",
+    )
     review_parser = subparsers.add_parser(
         "export-review-json",
         parents=[_base_parser(default_config)],
@@ -1709,6 +1857,24 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
                 "scanned_file_in_job": len(registry.scanned_files_in_job),
                 "scan_jobs": len(registry.scan_jobs),
             }
+        )
+        return 0
+    if args.command == "delete-document-paths":
+        _emit_json(
+            _delete_document_paths_from_sources(
+                config,
+                input_path=args.input,
+                rel_paths=args.rel_path,
+            )
+        )
+        return 0
+    if args.command == "show-duplicate-docs":
+        _emit_text(
+            _show_duplicate_documents(
+                config.sqlite3_db_path,
+                limit=args.limit,
+                offset=args.offset,
+            )
         )
         return 0
     if args.command == "export-review-json":
