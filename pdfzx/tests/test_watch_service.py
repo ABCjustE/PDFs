@@ -52,16 +52,12 @@ def test_watch_service_routes_deleted_pdf_inside_root(tmp_path: Path) -> None:
     assert operation.src_rel_path == "Books/a.pdf"
 
 
-def test_watch_service_routes_modified_pdf_to_reconcile(tmp_path: Path) -> None:
+def test_watch_service_ignores_modified_pdf(tmp_path: Path) -> None:
     service = WatchService(root=tmp_path, logger=logging.getLogger("test.watch"))
 
-    operation = service.handle_event(
-        FileModifiedEvent(str(tmp_path / "Books" / "a.pdf"))
-    )
+    operation = service.handle_event(FileModifiedEvent(str(tmp_path / "Books" / "a.pdf")))
 
-    assert operation is not None
-    assert operation.operation == "path_reconcile"
-    assert operation.src_rel_path == "Books/a.pdf"
+    assert operation is None
 
 
 def test_watch_service_ignores_non_pdf_and_outside_root(tmp_path: Path) -> None:

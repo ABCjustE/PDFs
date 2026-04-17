@@ -30,29 +30,8 @@ class WatchService:
         raw_event = self.normalize_event(event)
         if raw_event is None:
             return None
-        self._logger.info(
-            "watch.raw",
-            extra={
-                "event": raw_event.event_class,
-                "etype": raw_event.event_type,
-                "src": raw_event.src_rel_path,
-                "dst": raw_event.dest_rel_path,
-                "synthetic": raw_event.is_synthetic,
-            },
-        )
-        operation = self.choose_operation(raw_event)
-        if operation is None:
-            return None
-        self._logger.info(
-            "watch.route",
-            extra={
-                "op": operation.operation,
-                "src": operation.src_rel_path,
-                "dst": operation.dest_rel_path,
-                "why": operation.reason,
-            },
-        )
-        return operation
+        self.log_raw_event(raw_event)
+        return self.route_raw_event(raw_event)
 
     def normalize_event(self, event: FileSystemEvent) -> RawWatchEvent | None:
         """Convert one watchdog event into a normalized raw watch event."""
@@ -72,7 +51,7 @@ class WatchService:
             is_synthetic=getattr(event, "is_synthetic", False),
         )
 
-    def choose_operation(  # noqa: PLR0911
+    def choose_operation(
         self, raw_event: RawWatchEvent
     ) -> CanonicalWatchOperation | None:
         """Choose one canonical project operation from a normalized raw event."""
@@ -112,14 +91,40 @@ class WatchService:
                 dest_rel_path=None,
                 reason="create event under watched root",
             )
-        if raw_event.event_class in {"FileModifiedEvent", "FileClosedEvent"}:
-            return CanonicalWatchOperation(
-                operation="path_reconcile",
-                src_rel_path=raw_event.src_rel_path,
-                dest_rel_path=None,
-                reason="ambiguous activity requires reconciliation",
-            )
         return None
+
+    def log_raw_event(self, raw_event: RawWatchEvent) -> None:
+        """Log one normalized raw watcher event."""
+        self._logger.debug(
+            "watch.raw",
+            extra={
+                "event": raw_event.event_class,
+                "etype": raw_event.event_type,
+                "src": raw_event.src_rel_path,
+                "dst": raw_event.dest_rel_path,
+                "synthetic": raw_event.is_synthetic,
+            },
+        )
+
+    def log_route(self, operation: CanonicalWatchOperation) -> None:
+        """Log one canonical routed watcher operation."""
+        self._logger.info(
+            "watch.route",
+            extra={
+                "op": operation.operation,
+                "src": operation.src_rel_path,
+                "dst": operation.dest_rel_path,
+                "why": operation.reason,
+            },
+        )
+
+    def route_raw_event(self, raw_event: RawWatchEvent) -> CanonicalWatchOperation | None:
+        """Choose and log one canonical operation from a normalized raw event."""
+        operation = self.choose_operation(raw_event)
+        if operation is None:
+            return None
+        self.log_route(operation)
+        return operation
 
     def _to_rel_path(self, raw_path: str | bytes | None) -> str | None:
         if raw_path is None:

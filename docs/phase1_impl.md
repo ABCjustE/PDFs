@@ -12,6 +12,25 @@ merged state to SQLite.
 - no LLM calls
 - no watcher-driven manual file CRUD yet
 
+## Module Map
+
+- `models.py`
+  - Pydantic bridge models for Phase 1 records and registry state
+- `config.py`
+  - environment variables to validated `ScanConfig`
+- `utils.py`
+  - path validation, streaming hashing, digital check, language detection
+- `inventory.py`
+  - one PDF path to one `DocumentRecord`
+- `normalizer.py`
+  - deterministic filename normalization; LLM normalization stays Phase 2 only
+- `storage.py`
+  - JSON import/export plus SQLite-backed primary storage
+- `registry.py`
+  - batch diff/merge algorithm
+- `__init__.py`
+  - `InventoryJob` and structured logging setup
+
 ## Runtime Entry Point
 
 Phase 1 currently runs through `InventoryJob` in `pdfzx/src/pdfzx/__init__.py`.
@@ -22,6 +41,41 @@ High-level flow:
 2. run `inventory.process_pdf(...)` in `pdfzx/src/pdfzx/inventory.py` for each file
 3. merge scanned records through `registry.run(...)` in `pdfzx/src/pdfzx/registry.py`
 4. persist through `SqliteStorage` in `pdfzx/src/pdfzx/storage.py`
+
+Current batch-scan flow:
+
+```text
+env: PDFZX_PDF_ROOT, PDFZX_SQLITE3_DB_PATH, PDFZX_JSON_DB
+        │
+        ▼
+   config.py -> ScanConfig
+        │
+        ▼
+   storage.py -> load SQLite into Registry bridge
+        │
+        ▼
+   inventory.py -> process each selected PDF:
+                   validate path
+                   hash file
+                   extract metadata / ToC / language / digital signals
+        │
+        ▼
+   normalizer.py -> compute normalised_name when enabled
+        │
+        ▼
+   registry.py -> batch diff / merge:
+        new sha256                         -> add DocumentRecord + scanned_file_in_job row
+        known sha256, new path            -> append path, count duplicate
+        known sha256, path mtime changed  -> refresh scanned_file_in_job, count updated
+        known sha256, same path mtime     -> skip
+        prior scanned path absent in run  -> count removed in scan summary
+        │
+        ▼
+   storage.py -> rewrite current SQLite-backed Phase 1 state
+        │
+        ▼
+   __init__.py -> structured JSON log summary
+```
 
 ## Current Persistence Model
 
@@ -105,6 +159,23 @@ This means Phase 1 currently has two layers:
 
 That bridge is intentional for the current stage.
 
+## Key Decisions
+
+- document identity
+  - `sha256` is the canonical document key
+- duplicate handling
+  - one logical document can have multiple current paths through `document_paths`
+- scan-run accounting
+  - `scanned_file_in_job` and `scan_jobs` exist to support the registry merge algorithm
+- removed files
+  - current Phase 1 treats them as scan-job summary state, not immediate canonical deletion
+- normalization
+  - deterministic filename normalization stays offline in Phase 1
+  - LLM-assisted normalization remains Phase 2
+- persistence
+  - SQLite is the current runtime store
+  - JSON remains compatibility and export/import only
+
 ## Phase 1 Boundaries
 
 Phase 1 includes:
@@ -133,3 +204,20 @@ The simplest accurate way to read Phase 1 is:
 - `documents` + `document_paths` are the canonical persisted document state
 - `scanned_file_in_job` + `scan_jobs` track scan-run history and diff state
 - `db.json` is no longer the normal persistence target
+
+## Environment
+
+Current Phase 1 environment surface:
+
+- `PDFZX_PDF_ROOT`
+  - required scan root
+- `PDFZX_SQLITE3_DB_PATH`
+  - primary SQLite path
+- `PDFZX_JSON_DB`
+  - compatibility/export JSON path
+- `PDFZX_ENABLE_NAME_NORMALIZATION`
+  - enable deterministic filename normalization
+- `PDFZX_FULLTEXT_DIR`
+  - retained config surface for text output workflows
+- `PDFZX_EXTRACT_TEXT`
+  - retained config flag for text extraction workflows

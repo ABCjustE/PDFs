@@ -23,8 +23,6 @@ try:
 except ModuleNotFoundError:
     export_review_json = None
 
-from watch_proc import run_watch_process
-
 from pdfzx import InventoryJob
 from pdfzx import configure_logging
 from pdfzx.config import DEFAULT_LLM_MAX_TOC_ENTRIES
@@ -51,6 +49,7 @@ from pdfzx.prompts.taxonomy_partition_generalize import TaxonomyPartitionGeneral
 from pdfzx.prompts.taxonomy_partition_proposal import build_sampled_document_summary
 from pdfzx.storage import JsonStorage
 from pdfzx.storage import SqliteStorage
+from pdfzx.watch import run_watch_process
 
 
 @dataclass(frozen=True, slots=True)
