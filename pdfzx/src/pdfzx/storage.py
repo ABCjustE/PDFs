@@ -14,16 +14,16 @@ from sqlalchemy.orm import Session
 
 from pdfzx.db.migration import import_registry_to_sqlite
 from pdfzx.db.models import Document
-from pdfzx.db.models import FileStat
-from pdfzx.db.models import Job
+from pdfzx.db.models import ScanJob
+from pdfzx.db.models import ScannedFileInJob
 from pdfzx.db.session import create_sqlite_engine
 from pdfzx.db.session import init_sqlite_db
 from pdfzx.models import DocumentRecord
-from pdfzx.models import FileStatRecord
-from pdfzx.models import JobRecord
 from pdfzx.models import JobStats
 from pdfzx.models import PdfMetadata
 from pdfzx.models import Registry
+from pdfzx.models import ScanJobRecord
+from pdfzx.models import ScannedFileInJobRecord
 from pdfzx.models import TocEntry
 
 logger = logging.getLogger(__name__)
@@ -98,8 +98,8 @@ class SqliteStorage:
         engine = create_sqlite_engine(self._path)
         try:
             with Session(engine) as session:
-                jobs = [
-                    JobRecord(
+                scan_jobs = [
+                    ScanJobRecord(
                         job_id=row.job_id,
                         run_at=row.run_at,
                         root_path=row.root_path,
@@ -111,7 +111,9 @@ class SqliteStorage:
                             skipped=row.skipped,
                         ),
                     )
-                    for row in session.scalars(select(Job).order_by(Job.run_at, Job.job_id)).all()
+                    for row in session.scalars(
+                        select(ScanJob).order_by(ScanJob.run_at, ScanJob.job_id)
+                    ).all()
                 ]
 
                 documents: dict[str, DocumentRecord] = {}
@@ -147,20 +149,26 @@ class SqliteStorage:
                         last_seen_job=row.last_seen_job,
                     )
 
-                file_stats = {
-                    row.rel_path: FileStatRecord(
+                scanned_files_in_job = {
+                    row.rel_path: ScannedFileInJobRecord(
                         rel_path=row.rel_path,
                         sha256=row.sha256,
                         size_bytes=row.size_bytes,
                         mtime=row.mtime,
                         last_scanned_job=row.last_scanned_job,
                     )
-                    for row in session.scalars(select(FileStat).order_by(FileStat.rel_path)).all()
+                    for row in session.scalars(
+                        select(ScannedFileInJob).order_by(ScannedFileInJob.rel_path)
+                    ).all()
                 }
         finally:
             engine.dispose()
 
-        return Registry(documents=documents, file_stats=file_stats, jobs=jobs)
+        return Registry(
+            documents=documents,
+            scanned_files_in_job=scanned_files_in_job,
+            scan_jobs=scan_jobs,
+        )
 
     def save(self, registry: Registry) -> None:
         """Persist Registry by rewriting the SQLite file from the canonical Registry state."""

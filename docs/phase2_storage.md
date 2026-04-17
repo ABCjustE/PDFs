@@ -32,8 +32,9 @@ Implemented ORM tables:
 - `documents`
 - `document_paths`
 - `document_toc`
-- `file_stats`
-- `jobs`
+- `scanned_file_in_job`
+- `scan_jobs`
+  - legacy JSON key: `jobs`
 - `prompts`
 - `llm_document_suggestions`
 - `llm_taxonomy_suggestions`

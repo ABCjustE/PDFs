@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -10,14 +12,17 @@ from sqlalchemy.orm import sessionmaker
 from pdfzx.db.models import Document
 from pdfzx.db.models import DocumentPath
 from pdfzx.db.models import DocumentTocEntry
-from pdfzx.db.models import FileStat
-from pdfzx.db.models import Job
 from pdfzx.db.models import LlmDocumentSuggestion
 from pdfzx.db.models import LlmTaxonomySuggestion
 from pdfzx.db.models import LlmTocReviewSuggestion
 from pdfzx.db.models import Prompt
+from pdfzx.db.models import ScanJob
+from pdfzx.db.models import ScannedFileInJob
 from pdfzx.db.session import init_sqlite_db
+from pdfzx.models import DocumentRecord
 from pdfzx.models import Registry
+from pdfzx.models import ScanJobRecord
+from pdfzx.models import ScannedFileInJobRecord
 
 
 def migrate_json_to_sqlite(
@@ -49,9 +54,9 @@ def import_registry_to_sqlite(
     engine = create_engine(f"sqlite:///{target_sqlite.resolve()}", future=True)
     session_factory = sessionmaker(bind=engine, future=True)
     with session_factory() as session:
-        _insert_jobs(session, registry.jobs)
+        _insert_scan_jobs(session, registry.scan_jobs)
         _insert_documents(session, registry.documents)
-        _insert_file_stats(session, registry.file_stats)
+        _insert_scanned_files_in_job(session, registry.scanned_files_in_job)
         _restore_phase2_state(
             session,
             phase2_state=phase2_state,
@@ -65,15 +70,15 @@ def import_registry_to_sqlite(
         "documents": len(registry.documents),
         "paths": sum(len(document.paths) for document in registry.documents.values()),
         "toc_entries": sum(len(document.toc) for document in registry.documents.values()),
-        "file_stats": len(registry.file_stats),
-        "jobs": len(registry.jobs),
+        "scanned_file_in_job": len(registry.scanned_files_in_job),
+        "scan_jobs": len(registry.scan_jobs),
     }
 
 
-def _insert_jobs(session: Session, jobs: list[object]) -> None:
-    for job in jobs:
+def _insert_scan_jobs(session: Session, scan_jobs: Sequence[ScanJobRecord]) -> None:
+    for job in scan_jobs:
         session.add(
-            Job(
+            ScanJob(
                 job_id=job.job_id,
                 run_at=job.run_at,
                 root_path=job.root_path,
@@ -86,7 +91,7 @@ def _insert_jobs(session: Session, jobs: list[object]) -> None:
         )
 
 
-def _insert_documents(session: Session, documents: dict[str, object]) -> None:
+def _insert_documents(session: Session, documents: Mapping[str, DocumentRecord]) -> None:
     for document in documents.values():
         session.add(
             Document(
@@ -126,10 +131,12 @@ def _insert_documents(session: Session, documents: dict[str, object]) -> None:
             )
 
 
-def _insert_file_stats(session: Session, file_stats: dict[str, object]) -> None:
-    for record in file_stats.values():
+def _insert_scanned_files_in_job(
+    session: Session, scanned_files_in_job: Mapping[str, ScannedFileInJobRecord]
+) -> None:
+    for record in scanned_files_in_job.values():
         session.add(
-            FileStat(
+            ScannedFileInJob(
                 rel_path=record.rel_path,
                 sha256=record.sha256,
                 size_bytes=record.size_bytes,

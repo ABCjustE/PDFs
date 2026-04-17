@@ -10,11 +10,11 @@ from pydantic import ValidationError
 
 from pdfzx.models import DocumentRecord
 from pdfzx.models import ExtractionStatus
-from pdfzx.models import FileStatRecord
-from pdfzx.models import JobRecord
 from pdfzx.models import JobStats
 from pdfzx.models import PdfMetadata
 from pdfzx.models import Registry
+from pdfzx.models import ScanJobRecord
+from pdfzx.models import ScannedFileInJobRecord
 from pdfzx.models import TocEntry
 
 # ── PdfMetadata ──────────────────────────────────────────────────────────────
@@ -42,9 +42,6 @@ def test_toc_entry_required_fields():
 def test_toc_entry_missing_field_raises():
     with pytest.raises(ValidationError):
         TocEntry(level=1, title="Chapter 1")  # page missing
-
-
-# ── ExtractionStatus ──────────────────────────────────────────────────────────
 
 
 def test_extraction_status_values():
@@ -126,11 +123,11 @@ def test_document_record_serialisation_roundtrip():
     assert restored == doc
 
 
-# ── FileStatRecord ────────────────────────────────────────────────────────────
+# ── ScannedFileInJobRecord ───────────────────────────────────────────────────
 
 
 def test_file_stat_record_fields():
-    fs = FileStatRecord(
+    fs = ScannedFileInJobRecord(
         rel_path="subdir/book.pdf",
         sha256="a" * 64,
         size_bytes=1024,
@@ -141,23 +138,25 @@ def test_file_stat_record_fields():
     assert fs.mtime == 1_700_000_000.0
 
 
-# ── JobRecord ─────────────────────────────────────────────────────────────────
+# ── ScanJobRecord ────────────────────────────────────────────────────────────
 
 
 def test_job_record_stats_defaults():
-    job = JobRecord(job_id="job-1", run_at=datetime(2024, 1, 1, tzinfo=UTC), root_path="/data/pdfs")
+    job = ScanJobRecord(
+        job_id="job-1", run_at=datetime(2024, 1, 1, tzinfo=UTC), root_path="/data/pdfs"
+    )
     assert job.stats == JobStats()
     assert job.stats.added == 0
 
 
 def test_job_record_serialisation_roundtrip():
-    job = JobRecord(
+    job = ScanJobRecord(
         job_id="job-2",
         run_at=datetime(2024, 6, 1, tzinfo=UTC),
         root_path="/data/pdfs",
         stats=JobStats(added=3, duplicates=1),
     )
-    restored = JobRecord.model_validate(job.model_dump())
+    restored = ScanJobRecord.model_validate(job.model_dump())
     assert restored == job
 
 
@@ -167,8 +166,8 @@ def test_job_record_serialisation_roundtrip():
 def test_registry_empty_defaults():
     r = Registry()
     assert r.documents == {}
-    assert r.file_stats == {}
-    assert r.jobs == []
+    assert r.scanned_files_in_job == {}
+    assert r.scan_jobs == []
 
 
 def test_registry_roundtrip_with_document():

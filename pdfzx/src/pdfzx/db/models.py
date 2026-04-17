@@ -42,8 +42,8 @@ class Document(Base):
     toc_invalid_reason: Mapped[str | None] = mapped_column(Text)
     extraction_status: Mapped[str | None] = mapped_column(String(32))
     force_extracted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    first_seen_job: Mapped[str | None] = mapped_column(ForeignKey("jobs.job_id"))
-    last_seen_job: Mapped[str | None] = mapped_column(ForeignKey("jobs.job_id"))
+    first_seen_job: Mapped[str | None] = mapped_column(ForeignKey("scan_jobs.job_id"))
+    last_seen_job: Mapped[str | None] = mapped_column(ForeignKey("scan_jobs.job_id"))
 
     paths: Mapped[list[DocumentPath]] = relationship(
         back_populates="document", cascade="all, delete-orphan"
@@ -51,7 +51,7 @@ class Document(Base):
     toc_entries: Mapped[list[DocumentTocEntry]] = relationship(
         back_populates="document", cascade="all, delete-orphan"
     )
-    file_stats: Mapped[list[FileStat]] = relationship(back_populates="document")
+    scanned_files_in_job: Mapped[list[ScannedFileInJob]] = relationship(back_populates="document")
     llm_document_suggestions: Mapped[list[LlmDocumentSuggestion]] = relationship(
         back_populates="document"
     )
@@ -97,25 +97,25 @@ class DocumentTocEntry(Base):
     document: Mapped[Document] = relationship(back_populates="toc_entries")
 
 
-class FileStat(Base):
-    """Per-path incremental scan state."""
+class ScannedFileInJob(Base):
+    """Per-path scan snapshot row used by the registry merge algorithm."""
 
-    __tablename__ = "file_stats"
+    __tablename__ = "scanned_file_in_job"
 
     rel_path: Mapped[str] = mapped_column(String(1024), primary_key=True)
     sha256: Mapped[str] = mapped_column(ForeignKey("documents.sha256"), nullable=False, index=True)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     mtime: Mapped[float] = mapped_column(Float, nullable=False)
-    last_scanned_job: Mapped[str] = mapped_column(ForeignKey("jobs.job_id"), nullable=False)
+    last_scanned_job: Mapped[str] = mapped_column(ForeignKey("scan_jobs.job_id"), nullable=False)
 
-    document: Mapped[Document] = relationship(back_populates="file_stats")
-    job: Mapped[Job] = relationship(back_populates="file_stats")
+    document: Mapped[Document] = relationship(back_populates="scanned_files_in_job")
+    job: Mapped[ScanJob] = relationship(back_populates="scanned_files_in_job")
 
 
-class Job(Base):
+class ScanJob(Base):
     """Inventory run audit record."""
 
-    __tablename__ = "jobs"
+    __tablename__ = "scan_jobs"
 
     job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     run_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
@@ -126,7 +126,7 @@ class Job(Base):
     duplicates: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     skipped: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
-    file_stats: Mapped[list[FileStat]] = relationship(back_populates="job")
+    scanned_files_in_job: Mapped[list[ScannedFileInJob]] = relationship(back_populates="job")
 
 
 class Prompt(Base):

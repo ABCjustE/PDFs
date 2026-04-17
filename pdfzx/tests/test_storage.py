@@ -46,7 +46,7 @@ def test_load_missing_file_returns_empty(tmp_path):
     store = JsonStorage(tmp_path / "db.json")
     registry = store.load()
     assert registry.documents == {}
-    assert registry.jobs == []
+    assert registry.scan_jobs == []
 
 
 def test_load_roundtrip(tmp_path):
@@ -68,7 +68,8 @@ def test_load_invalid_schema_raises(tmp_path):
     path = tmp_path / "db.json"
     # missing required fields in DocumentRecord
     path.write_text(
-        '{"documents": {"x": {"sha256": "x"}}, "file_stats": {}, "jobs": []}', encoding="utf-8"
+        '{"documents": {"x": {"sha256": "x"}}, "scanned_files_in_job": {}, "jobs": []}',
+        encoding="utf-8",
     )
     with pytest.raises(ValueError, match="Schema validation"):
         JsonStorage(path).load()
@@ -106,7 +107,7 @@ def test_sqlite_load_missing_file_returns_empty(tmp_path):
     store = SqliteStorage(tmp_path / "db.sqlite3")
     registry = store.load()
     assert registry.documents == {}
-    assert registry.jobs == []
+    assert registry.scan_jobs == []
 
 
 def test_sqlite_roundtrip(tmp_path):

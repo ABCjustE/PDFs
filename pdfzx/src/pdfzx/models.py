@@ -6,6 +6,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
+from pydantic import AliasChoices
 from pydantic import BaseModel
 from pydantic import Field
 
@@ -14,11 +15,11 @@ class ExtractionStatus(StrEnum):
     """Phase 2.1 text-extraction lifecycle state."""
 
     pending = "pending"
-    skipped = "skipped"  # ineligible: not digital or no ToC
-    gate_fail = "gate_fail"  # LLM rejected degenerate ToC
-    gate_pass = "gate_pass"  # LLM approved, text files written
-    forced = "forced"  # force_extract() bypassed the gate
-    failed = "failed"  # extraction attempted but errored
+    skipped = "skipped"
+    gate_fail = "gate_fail"
+    gate_pass = "gate_pass"
+    forced = "forced"
+    failed = "failed"
 
 
 class PdfMetadata(BaseModel):
@@ -60,8 +61,8 @@ class DocumentRecord(BaseModel):
     last_seen_job: str | None = None
 
 
-class FileStatRecord(BaseModel):
-    """Per-path file stat for mtime-gated incremental scanning."""
+class ScannedFileInJobRecord(BaseModel):
+    """Per-path scan snapshot used by the registry merge algorithm."""
 
     rel_path: str
     sha256: str
@@ -80,7 +81,7 @@ class JobStats(BaseModel):
     skipped: int = 0
 
 
-class JobRecord(BaseModel):
+class ScanJobRecord(BaseModel):
     """
     Audit record for a single inventory scan run.
 
@@ -95,8 +96,16 @@ class JobRecord(BaseModel):
 
 
 class Registry(BaseModel):
-    """Top-level db.json structure."""
+    """Compatibility registry shape used by the Phase 1 merge/storage bridge."""
 
     documents: dict[str, DocumentRecord] = Field(default_factory=dict)
-    file_stats: dict[str, FileStatRecord] = Field(default_factory=dict)
-    jobs: list[JobRecord] = Field(default_factory=list)
+    scanned_files_in_job: dict[str, ScannedFileInJobRecord] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("scanned_files_in_job", "file_stats"),
+        serialization_alias="scanned_files_in_job",
+    )
+    scan_jobs: list[ScanJobRecord] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("scan_jobs", "jobs"),
+        serialization_alias="scan_jobs",
+    )

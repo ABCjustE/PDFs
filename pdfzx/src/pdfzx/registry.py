@@ -1,4 +1,4 @@
-"""Registry diff/merge — scan results → updated Registry + JobRecord."""
+"""Registry diff/merge — scan results → updated Registry + ScanJobRecord."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ from datetime import datetime
 from pathlib import Path
 
 from pdfzx.models import DocumentRecord
-from pdfzx.models import FileStatRecord
-from pdfzx.models import JobRecord
 from pdfzx.models import JobStats
 from pdfzx.models import Registry
+from pdfzx.models import ScanJobRecord
+from pdfzx.models import ScannedFileInJobRecord
 from pdfzx.storage import Storage
 
 logger = logging.getLogger(__name__)
@@ -32,15 +32,16 @@ def _size(path: Path) -> int:
 
 def merge(
     registry: Registry, records: list[DocumentRecord], paths: list[Path], root: Path, job_id: str
-) -> tuple[Registry, JobRecord]:
+) -> tuple[Registry, ScanJobRecord]:
     """Merge freshly scanned DocumentRecords into the existing Registry.
 
     Diff logic:
-    - new sha256                  → add DocumentRecord, add FileStatRecord
+    - new sha256                  → add DocumentRecord, add ScannedFileInJobRecord
     - known sha256, new path      → append path, count as duplicate
-    - known sha256, mtime changed → update FileStatRecord, count as updated
+    - known sha256, mtime changed → update ScannedFileInJobRecord, count as updated
     - known sha256, same mtime    → skip (count as skipped)
-    - path in db but not in scan  → mark via last_seen_job (count as removed)
+    - path known in prior scan state but not in this batch
+      → count as removed in JobStats; document state is kept
 
     Args:
         registry: The loaded Registry to merge into (mutated in place).
@@ -50,12 +51,12 @@ def merge(
         job_id: Identifier for this scan run.
 
     Returns:
-        Tuple of (updated Registry, JobRecord).
+        Tuple of (updated Registry, ScanJobRecord).
     """
     stats = JobStats()
     resolved_root = root.resolve()
 
-    # index current file_stats by rel_path for O(1) lookup
+    # index current scan snapshot rows by rel_path for O(1) lookup
     seen_rel_paths: set[str] = set()
 
     for record, path in zip(records, paths, strict=True):
@@ -63,7 +64,7 @@ def merge(
         seen_rel_paths.add(rel)
 
         existing_doc = registry.documents.get(record.sha256)
-        existing_stat = registry.file_stats.get(rel)
+        existing_stat = registry.scanned_files_in_job.get(rel)
 
         current_mtime = _mtime(path)
         current_size = _size(path)
@@ -82,7 +83,7 @@ def merge(
             record.first_seen_job = job_id
             record.last_seen_job = job_id
             registry.documents[record.sha256] = record
-            registry.file_stats[rel] = FileStatRecord(
+            registry.scanned_files_in_job[rel] = ScannedFileInJobRecord(
                 rel_path=rel,
                 sha256=record.sha256,
                 size_bytes=current_size,
@@ -102,7 +103,7 @@ def merge(
 
             if existing_stat is None or existing_stat.mtime != current_mtime:
                 # file changed on disk (or stat record missing)
-                registry.file_stats[rel] = FileStatRecord(
+                registry.scanned_files_in_job[rel] = ScannedFileInJobRecord(
                     rel_path=rel,
                     sha256=record.sha256,
                     size_bytes=current_size,
@@ -112,12 +113,12 @@ def merge(
                 stats.updated += 1
                 logger.info("updated", extra={"sha256": record.sha256, "path": rel})
             else:
-                registry.file_stats[rel].last_scanned_job = job_id
+                registry.scanned_files_in_job[rel].last_scanned_job = job_id
                 stats.skipped += 1
 
     # flag removed paths (in db but not in this scan) — count per document, not per path
     removed_hashes: set[str] = set()
-    for rel, stat in registry.file_stats.items():
+    for rel, stat in registry.scanned_files_in_job.items():
         if rel not in seen_rel_paths and stat.sha256 not in removed_hashes:
             removed_hashes.add(stat.sha256)
             stats.removed += 1
@@ -126,17 +127,17 @@ def merge(
                 extra={"sha256": stat.sha256, "path": rel},
             )
 
-    job = JobRecord(
+    job = ScanJobRecord(
         job_id=job_id, run_at=datetime.now(tz=UTC), root_path=str(resolved_root), stats=stats
     )
-    registry.jobs.append(job)
+    registry.scan_jobs.append(job)
     return registry, job
 
 
 def run(
     storage: Storage, records: list[DocumentRecord], paths: list[Path], root: Path
-) -> JobRecord:
-    """Load, merge, and persist the registry; return the JobRecord.
+) -> ScanJobRecord:
+    """Load, merge, and persist the registry; return the ScanJobRecord.
 
     Args:
         storage: Storage implementation to load/save the Registry.
@@ -145,7 +146,7 @@ def run(
         root: Scan root path.
 
     Returns:
-        The JobRecord created for this run.
+        The ScanJobRecord created for this run.
     """
     job_id = _job_id()
     registry = storage.load()

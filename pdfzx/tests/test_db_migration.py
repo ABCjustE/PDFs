@@ -12,8 +12,8 @@ from pdfzx.db.migration import migrate_json_to_sqlite
 from pdfzx.db.models import Document
 from pdfzx.db.models import DocumentPath
 from pdfzx.db.models import DocumentTocEntry
-from pdfzx.db.models import FileStat
-from pdfzx.db.models import Job
+from pdfzx.db.models import ScanJob
+from pdfzx.db.models import ScannedFileInJob
 
 
 def test_migrate_json_to_sqlite_imports_registry(tmp_path: Path) -> None:
@@ -42,13 +42,12 @@ def test_migrate_json_to_sqlite_imports_registry(tmp_path: Path) -> None:
       "is_digital": true,
       "toc_valid": null,
       "toc_invalid_reason": null,
-      "extraction_status": null,
       "force_extracted": false,
       "first_seen_job": "job-1",
       "last_seen_job": "job-1"
     }
   },
-  "file_stats": {
+  "scanned_files_in_job": {
     "books/sample.pdf": {
       "rel_path": "books/sample.pdf",
       "sha256": "abc",
@@ -57,7 +56,7 @@ def test_migrate_json_to_sqlite_imports_registry(tmp_path: Path) -> None:
       "last_scanned_job": "job-1"
     }
   },
-  "jobs": [
+  "scan_jobs": [
     {
       "job_id": "job-1",
       "run_at": "2026-03-29T10:00:00",
@@ -75,8 +74,8 @@ def test_migrate_json_to_sqlite_imports_registry(tmp_path: Path) -> None:
     assert summary["documents"] == 1
     assert summary["paths"] == 2
     assert summary["toc_entries"] == 1
-    assert summary["file_stats"] == 1
-    assert summary["jobs"] == 1
+    assert summary["scanned_file_in_job"] == 1
+    assert summary["scan_jobs"] == 1
     assert target_sqlite.exists()
 
     engine = create_engine(f"sqlite:///{target_sqlite}")
@@ -84,15 +83,17 @@ def test_migrate_json_to_sqlite_imports_registry(tmp_path: Path) -> None:
         assert session.scalar(select(func.count()).select_from(Document)) == 1
         assert session.scalar(select(func.count()).select_from(DocumentPath)) == 2
         assert session.scalar(select(func.count()).select_from(DocumentTocEntry)) == 1
-        assert session.scalar(select(func.count()).select_from(FileStat)) == 1
-        assert session.scalar(select(func.count()).select_from(Job)) == 1
+        assert session.scalar(select(func.count()).select_from(ScannedFileInJob)) == 1
+        assert session.scalar(select(func.count()).select_from(ScanJob)) == 1
     engine.dispose()
 
 
 def test_migrate_json_to_sqlite_requires_replace_for_existing_target(tmp_path: Path) -> None:
     source_json = tmp_path / "db.json"
     target_sqlite = tmp_path / "db.sqlite3"
-    source_json.write_text('{"documents": {}, "file_stats": {}, "jobs": []}', encoding="utf-8")
+    source_json.write_text(
+        '{"documents": {}, "scanned_files_in_job": {}, "scan_jobs": []}', encoding="utf-8"
+    )
     target_sqlite.write_text("existing", encoding="utf-8")
 
     with pytest.raises(FileExistsError, match="already exists"):

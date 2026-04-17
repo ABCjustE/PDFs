@@ -15,8 +15,8 @@ import pymupdf
 from pdfzx.config import ScanConfig
 from pdfzx.inventory import process_pdf
 from pdfzx.models import DocumentRecord
-from pdfzx.models import JobRecord
 from pdfzx.models import Registry
+from pdfzx.models import ScanJobRecord
 from pdfzx.normalizer import normalize_file_name
 from pdfzx.registry import run as registry_run
 from pdfzx.storage import SqliteStorage
@@ -129,14 +129,14 @@ class InventoryJob:
         targets: list[Path],
         on_progress: Callable[[Path], None] | None = None,
         workers: int = 1,
-    ) -> JobRecord:
+    ) -> ScanJobRecord:
         """Resolve selected targets, process PDFs, then merge them into the registry.
 
         Args:
             targets: Files or directories to scan.
             on_progress: Optional callback invoked with each path after processing.
             workers: Number of parallel worker processes for extraction (default 1 = serial).
-                     Merge is always serial — workers never touch db.json.
+                     Merge is always serial — workers never touch persistence.
         """
         pdf_paths = self.resolve(targets)
         self._logger.info(

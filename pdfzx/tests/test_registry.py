@@ -58,7 +58,7 @@ def test_first_scan_creates_file_stat(make_pdf, pdf_root, tmp_path):
 
     registry, _ = merge(Registry(), records, [path], pdf_root, "job1")
 
-    assert "b.pdf" in registry.file_stats
+    assert "b.pdf" in registry.scanned_files_in_job
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +159,7 @@ def test_content_change_updates_document(make_pdf, pdf_root, tmp_path):
     records2 = _scan([path], pdf_root, config)
     registry, job2 = merge(registry, records2, [path], pdf_root, "job2")
 
-    new_sha = registry.file_stats["doc.pdf"].sha256
+    new_sha = registry.scanned_files_in_job["doc.pdf"].sha256
 
     assert new_sha != old_sha, "hash must change after content change"
     assert job2.stats.added == 1
@@ -167,8 +167,8 @@ def test_content_change_updates_document(make_pdf, pdf_root, tmp_path):
     assert "doc.pdf" not in registry.documents[old_sha].paths
     # new document owns the path
     assert "doc.pdf" in registry.documents[new_sha].paths
-    # file_stats points to the new hash
-    assert registry.file_stats["doc.pdf"].sha256 == new_sha
+    # scanned_files_in_job points to the new hash
+    assert registry.scanned_files_in_job["doc.pdf"].sha256 == new_sha
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +187,7 @@ def test_run_persists_registry(make_pdf, pdf_root, tmp_path):
     assert job.stats.added == 1
     reloaded = storage.load()
     assert len(reloaded.documents) == 1
-    assert len(reloaded.jobs) == 1
+    assert len(reloaded.scan_jobs) == 1
 
 
 def test_run_appends_jobs(make_pdf, pdf_root, tmp_path):
@@ -200,4 +200,4 @@ def test_run_appends_jobs(make_pdf, pdf_root, tmp_path):
     run(storage, records, [path], pdf_root)
 
     registry = storage.load()
-    assert len(registry.jobs) == 2
+    assert len(registry.scan_jobs) == 2

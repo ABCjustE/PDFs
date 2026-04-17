@@ -1,241 +1,135 @@
-# Phase 1 — Implementation Status
+# Phase 1 — Current Implementation
 
-## Completed Steps
+Phase 1 is the offline scan and merge layer.
+It walks PDFs under the configured root, extracts deterministic document facts, and persists the
+merged state to SQLite.
 
-### Step 1 — `models.py` + `config.py`
-Stable Pydantic V2 contract for all modules.
+## Scope
 
-**`models.py`**
-- `ExtractionStatus(StrEnum)` — pending, skipped, gate_fail, gate_pass, forced, failed
-- `PdfMetadata` — title, author, creator, created, modified, extra
-- `TocEntry` — level, title, page
-- `DocumentRecord` — sha256 (PK), md5, paths[], file_name, normalised_name,
-  metadata, toc, languages[], is_digital, extraction_status?, force_extracted,
-  first_seen_job?, last_seen_job?
-- `FileStatRecord` — rel_path, sha256, size_bytes, mtime, last_scanned_job
-- `JobStats` — added, updated, removed, duplicates, skipped
-- `JobRecord` — job_id, run_at, root_path, stats
-- `Registry` — documents{}, file_stats{}, jobs[]
+- offline only
+- library-first execution
+- deterministic extraction from local files
+- no LLM calls
+- no watcher-driven manual file CRUD yet
 
-**`config.py`**
-- `ScanConfig` — root_path, db_path, ocr_char_threshold=100, ocr_scan_pages=3,
-  fulltext_dir=./pdf_fulltext, extract_text=True, sqlite3_db_path=./db.sqlite3
-- `get_config()` — reads all `PDFZX_*` env vars including `PDFZX_FULLTEXT_DIR`
-  and `PDFZX_EXTRACT_TEXT`, re-reads on every call
+## Runtime Entry Point
 
-**Key decisions:**
-- `first_seen_job` / `last_seen_job` are `str | None` — `inventory.py` returns `None`,
-  `registry.py` stamps the job ID on merge
-- `get_config()` has no cache — caller is responsible for lifecycle
-- `ExtractionStatus` uses `StrEnum` (Python 3.11+) — avoids `str, Enum` dual-inheritance
+Phase 1 currently runs through `InventoryJob` in `pdfzx/src/pdfzx/__init__.py`.
 
----
+High-level flow:
 
-### Step 2 — `utils.py`
-Four offline pure functions, no state, no PDF-to-record concerns.
+1. resolve selected PDF paths under `PDFZX_PDF_ROOT`
+2. run `inventory.process_pdf(...)` in `pdfzx/src/pdfzx/inventory.py` for each file
+3. merge scanned records through `registry.run(...)` in `pdfzx/src/pdfzx/registry.py`
+4. persist through `SqliteStorage` in `pdfzx/src/pdfzx/storage.py`
 
-- `compute_hashes(path)` — streaming SHA-256 + MD5, O(n) constant memory
-- `validate_path(path, root)` — path traversal guard, raises `ValueError`
-- `is_digital(doc, threshold, pages=3)` — char count heuristic, pages capped at doc length
-- `detect_languages(text)` — langdetect wrapper, `DetectorFactory.seed=0` for determinism
+## Current Persistence Model
 
-**Key decisions:**
-- `extract_metadata`, `extract_toc`, `ocr_pdf` intentionally excluded — belong to
-  `inventory.py` and Phase 2 respectively; premature addition would leak API surface
-- `pages` is variadic and driven by `ScanConfig.ocr_scan_pages`
+SQLite is the normal persistence target for Phase 1.
+`db.json` is no longer the live runtime store for scan runs. It remains only as:
 
----
+- legacy import source
+- export format
+- compatibility shape for the in-memory `Registry` contract
 
-### Step 3 — `inventory.py`
-Single public function `process_pdf(path, root, config) → DocumentRecord`.
+Current Phase 1 tables:
 
-- `_extract_metadata(doc)` — maps pymupdf metadata dict to `PdfMetadata`
-- `_extract_toc(doc)` — maps pymupdf ToC list to `list[TocEntry]`
-- Calls `validate_path`, `compute_hashes`, `is_digital`, `detect_languages`
-- `first_seen_job` / `last_seen_job` left as `None` — registry stamps on merge
-- Errors logged and re-raised, never swallowed
+- `documents`
+  - canonical document row keyed by `sha256`
+  - stores metadata, names, language list, digital flag, ToC validity fields, and job references
+- `document_paths`
+  - canonical mapping from `sha256` to current relative paths
+  - this is the path table to reason about for future watcher/manual file operations
+- `document_toc`
+  - ordered ToC entries per document
+- `scanned_file_in_job`
+  - per-path batch-scan state
+  - used by the scan diff/merge logic, not as the main path model
+  - legacy JSON key: `file_stats`
+- `scan_jobs`
+  - one audit row per scan run with aggregate counters
+  - legacy JSON key: `jobs`
 
-**Key decisions:**
-- ToC titles are cleaned during extraction via `normalizer.clean_text()` so embedded nulls,
-  control characters, and common placeholder artifacts (for example `·` from malformed nulls)
-  do not leak into `TocEntry.title`
+Phase 2 tables also exist in the same database, but they are outside the Phase 1 scan pipeline.
 
----
+## What `scanned_file_in_job` Means
 
-### Step 4 — `normalizer.py`
-- `normalize(name)` — deterministic token normalization
-- `normalize_file_name(name)` — filename-oriented normalization for `normalised_name`;
-  uses `file_name` as input, replaces non-alphanumeric runs with spaces, collapses spaces,
-  title-cases tokens, and preserves the `.pdf` suffix for rename use
-- `normalize_llm(name, context)` — Phase 2 stub, raises `NotImplementedError`
+- remember what a scan run last saw at a relative path
+- support batch diffing in `registry.py`
+- let the merge logic decide added / updated / skipped / removed counts
 
-**Key decisions:**
-- `normalised_name` is derived from `file_name`, not `metadata.title`
-- `normalised_name` is rename-oriented and keeps the `.pdf` suffix
+The canonical path mapping is `document_paths`, not `scanned_file_in_job`.
+The old JSON registry shape may still use the legacy key `file_stats`; the current bridge accepts
+that key for compatibility and serializes the newer name `scanned_files_in_job`.
 
----
+## What `registry.py` Does
 
-### Step 5 — `storage.py`
-- `Storage` Protocol — `load() → Registry`, `save(registry) → None`
-- `JsonStorage` — concrete implementation; returns empty `Registry` if file absent;
-  raises `ValueError` on corrupt JSON or schema mismatch
-- `SqliteStorage` — current primary runtime storage; reconstructs/saves canonical
-  `Registry` via SQLite instead of writing `db.json`
+Registry is the bridge concept that combines in-memory state, persistence, and the batch merge algorithm.
 
-**Key decisions:**
-- SQLite is now the primary store for Phase 1 scan/backfill
-- JSON is retained as an import/export format, not the live write target
-- `SqliteStorage.save()` currently rewrites from the canonical `Registry` state, which keeps
-  the existing `registry.py` contract stable during the storage migration
+`pdfzx/src/pdfzx/registry.py` is the Phase 1 batch diff/merge engine.
 
----
+It merges freshly scanned `DocumentRecord`s into the existing in-memory `Registry` and records one
+`ScanJobRecord`.
 
-### Step 6 — `registry.py`
-- `merge(registry, records, paths, root, job_id) → (Registry, JobRecord)`
-- `run(storage, records, paths, root) → JobRecord` — load → merge → save
+Current scan cases:
 
-**Diff logic (corrected after code review):**
+- new `sha256`
+  - add new document state
+  - add new `scanned_file_in_job` entry
+- known `sha256`, new path
+  - treat as another known path for that document
+  - count as duplicate
+- known `sha256`, path mtime changed
+  - refresh `scanned_file_in_job`
+  - count as updated
+- known `sha256`, same path mtime
+  - skip
+- path known in previous registry state but not seen in this batch
+  - count as removed for the job summary
 
-| Case | Action |
-|------|--------|
-| new sha256 | add `DocumentRecord` + `FileStatRecord` |
-| new sha256, path previously held by another doc | remove path from old doc's `paths[]` first |
-| known sha256, new path | append to `paths[]`, count as duplicate |
-| known sha256, mtime changed | update `FileStatRecord`, count as updated |
-| known sha256, same mtime | count as skipped |
-| path in db, not in scan | count as removed — **per document** (deduped by sha256), never deleted |
+Important constraint:
 
-**Key decisions:**
-- `removed` is counted once per logical document (sha256), not once per missing path
-- Content-change-in-place: old document loses the path before new document is inserted
-- `file_stats` is the path-level source of truth for incremental scans: when the same
-  `rel_path` keeps the same file name but its PDF bytes change, the old `file_stats[rel_path]`
-  entry tells us which previous sha256 owned that path. Merge then reassigns the path from the
-  old `DocumentRecord` to the new one and updates `file_stats` to the new sha256/mtime/size
+- this is still a batch-scan model
+- it is not yet the watcher/manual file-operation model
 
-**Example: same path, changed PDF content**
+## Pydantic Contract vs SQLite Schema
 
-- same `rel_path`
-- different file bytes
-- therefore different `sha256`
-- likely different `mtime` and maybe different `size_bytes`
+- `inventory.py` produces `DocumentRecord`
+- `registry.py` still merges in-memory `Registry` objects
+- `SqliteStorage` bridges between the in-memory contract and SQLite rows
 
-How `file_stats` is used:
+This means Phase 1 currently has two layers:
 
-- look up the existing `FileStatRecord` by `rel_path`
-- compare current file state with stored state
-- if the path is the same but the content hash changed, that path now belongs to a new
-  `DocumentRecord`
+- in-memory Pydantic registry contract
+- SQLite persistence layer
 
-Flow:
+That bridge is intentional for the current stage.
 
-1. scan `sub/doc.pdf`
-2. find existing `file_stats["sub/doc.pdf"]`
-3. old record says `sha256 = A`
-4. current scan produces `sha256 = B`
-5. registry updates `file_stats["sub/doc.pdf"]` to `sha256 = B`
-6. old document with `sha256 = A` loses that path
-7. new/current document with `sha256 = B` owns that path
+## Phase 1 Boundaries
 
-**Example: moved or removed PDF**
+Phase 1 includes:
 
-Removed:
+- file hashing
+- PDF metadata extraction
+- ToC extraction
+- digital/language heuristics
+- deterministic normalized names
+- batch scan merge
+- SQLite persistence
 
-- old path exists in `file_stats`
-- current scan does not see that `rel_path`
-- registry counts it as removed
-- old `DocumentRecord` is kept for history; it is not deleted
+Phase 1 does not include:
 
-Moved:
+- LLM prompting
+- taxonomy proposal or assignment
+- watcher-driven manual path reconciliation
+- OCR enrichment pipeline design beyond existing extraction flags
 
-- old path: `a/doc.pdf`
-- new path: `b/doc.pdf`
-- same bytes, therefore same `sha256`
+## Mental Model
 
-Flow:
+The simplest accurate way to read Phase 1 is:
 
-1. previous scan stored `file_stats["a/doc.pdf"]`
-2. current scan no longer sees `a/doc.pdf`
-3. current scan sees `b/doc.pdf`
-4. scanned record for `b/doc.pdf` has the same `sha256` as the old document
-5. registry appends `b/doc.pdf` to that existing document's `paths[]`
-6. old path is treated as missing/removed
-7. new path is treated as another known path for the same logical document
-
-Current interpretation:
-
-- remove = previously known path not seen this run
-- move = missing old path + newly seen path with the same `sha256`
-
-This means Phase 1 does not store a first-class "rename" event. It infers moves from
-path disappearance plus reappearance of the same content hash at another path.
-
----
-
-### Step 7 — `__init__.py`
-- `configure_logging(level)` — dictConfig JSON formatter to stdout
-- `InventoryJob` — resolves selected targets, processes PDFs, normalises names, and now
-  persists Phase 1 state through `SqliteStorage`
-
-**Key decisions:**
-- batch scan and `backfill` now operate on SQLite-backed data
-- `db.json` is no longer updated by normal scan runs
-
----
-
-### Step 8 — `pipeline.py`
-Phase 2 stub only. `enrich(record)` raises `NotImplementedError`.
-
-
----
-
-### Step 9 — Polish
-- `pyproject.toml` — `TC001` added to ruff ignore (runtime imports); mypy overrides for
-  `pymupdf` and `langdetect` (untyped C extensions); `[per-file-ignores]` for test files
-- `AGENTS.md` — Code Style Conformance section added
-- `client.py` commands:
-  - `scan` — reads chooser file and writes Phase 1 results to SQLite
-  - `backfill` — updates `normalised_name` from SQLite-backed records
-  - `migrate-sqlite` — imports legacy `db.json` into SQLite
-  - `export-json` — exports the current SQLite-backed registry to JSON
-- `pdfzx.db.*` — SQLAlchemy ORM base/models/session plus JSON→SQLite migration logic
-
----
-
-## Test Coverage
-
-| File | Tests | Coverage |
-|------|-------|----------|
-| `models.py` | 14 | 100% |
-| `config.py` | 11 | 100% |
-| `utils.py` | 10 | 95% |
-| `inventory.py` | 10 | 96% |
-| `normalizer.py` | 11 | 98% |
-| `storage.py` | 12 | 100% |
-| `registry.py` | 9 | 100% |
-| `db/migration.py` | 2 | 100% |
-
-**36 focused backend tests passing for the SQLite cutover path**
-
----
-
-## Notes
-
-- pymupdf SWIG `DeprecationWarning` on Python 3.14 — upstream issue, not actionable
-- `utils.py` lines 57–58 (`LangDetectException` branch) not covered — acceptable,
-  requires deliberately undetectable text to trigger
-- `inventory.py` lines 66–68 (pymupdf open exception) not covered — requires a corrupt PDF
-- `__init__.py` `run_inventory()` not covered by unit tests — integration-level entrypoint
-- `pipeline.py` not covered — Phase 2 stub, deferred
-- current SQLite persistence still adapts the existing full-`Registry` load/save contract;
-  repository-style relational CRUD is planned later for Phase 2 prompt/suggestion workflows
-
----
-
-## Pending
-
-| Item | Notes |
-|------|-------|
-| Real-world integration test | Run `run_inventory()` against actual `pdf_root/` symlink |
-| `phase1_impl.md` → archive | Move to `plans/phase1_done.md` once integration test passes |
-| Phase 2.2 implementation | Review `plans/phase2.md` Part 2 before starting |
+- `inventory.py` extracts document facts from files
+- `registry.py` computes batch scan deltas
+- `documents` + `document_paths` are the canonical persisted document state
+- `scanned_file_in_job` + `scan_jobs` track scan-run history and diff state
+- `db.json` is no longer the normal persistence target

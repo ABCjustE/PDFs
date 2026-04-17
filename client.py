@@ -23,6 +23,8 @@ try:
 except ModuleNotFoundError:
     export_review_json = None
 
+from watch_proc import run_watch_process
+
 from pdfzx import InventoryJob
 from pdfzx import configure_logging
 from pdfzx.config import DEFAULT_LLM_MAX_TOC_ENTRIES
@@ -45,9 +47,7 @@ from pdfzx.partitioning.sampler import chunk_items
 from pdfzx.partitioning.sampler import seeded_shuffle
 from pdfzx.prompts.taxonomy_assignment import TaxonomyAssignmentChildOption
 from pdfzx.prompts.taxonomy_assignment import build_taxonomy_assignment_prompt_input
-from pdfzx.prompts.taxonomy_partition_generalize import (
-    TaxonomyPartitionGeneralizeProposal,
-)
+from pdfzx.prompts.taxonomy_partition_generalize import TaxonomyPartitionGeneralizeProposal
 from pdfzx.prompts.taxonomy_partition_proposal import build_sampled_document_summary
 from pdfzx.storage import JsonStorage
 from pdfzx.storage import SqliteStorage
@@ -690,7 +690,7 @@ def _taxonomy_ancestor_names(node_path: str | None) -> list[str]:
     return [part.strip() for part in node_path.split("/") if part.strip()][1:]
 
 
-def _probe_partition_runs_from_batches(
+def _probe_partition_runs_from_batches(  # noqa: PLR0913
     config: ScanConfig,
     *,
     node_path: str | None,
@@ -1340,6 +1340,12 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
         default=_default_workers(),
         help="Number of parallel worker processes for PDF extraction (default 1 = serial).",
     )
+    subparsers.add_parser(
+        "watch",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help="Start the watchdog-based file watching process in the foreground.",
+    )
 
     subparsers.add_parser(
         "backfill",
@@ -1380,7 +1386,10 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
         "export-review-json",
         parents=[_base_parser(default_config)],
         add_help=False,
-        help="(Suspended) Export side-by-side review rows for current and suggested name/path data.",
+        help=(
+            "(Suspended) Export side-by-side review rows for current and suggested "
+            "name/path data."
+        ),
     )
     review_parser.add_argument(
         "--output",
@@ -1698,8 +1707,8 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
                 "source_sqlite": str(config.sqlite3_db_path.resolve()),
                 "target_json": str(args.json_db.resolve()),
                 "documents": len(registry.documents),
-                "file_stats": len(registry.file_stats),
-                "jobs": len(registry.jobs),
+                "scanned_file_in_job": len(registry.scanned_files_in_job),
+                "scan_jobs": len(registry.scan_jobs),
             }
         )
         return 0
@@ -1718,6 +1727,8 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
     if args.command == "bootstrap-taxonomy-root":
         _emit_json(_bootstrap_taxonomy_root(config.sqlite3_db_path))
         return 0
+    if args.command == "watch":
+        return run_watch_process(config=config, log_level=args.log_level)
     if args.command == "run-taxonomy-partition":
         exclude_path_keywords = _taxonomy_exclude_path_keywords(
             config, args.exclude_path_keyword

@@ -9,23 +9,44 @@ sequenceDiagram
     participant FS as PDF files
     participant Inv as inventory.py
     participant Reg as registry.py
-    participant DB as SqliteStorage
+    participant Store as SqliteStorage
+    participant DB as SQLite
 
     Client->>Job: run(targets)
-    Job->>Job: resolve file and directory targets
-    Job->>FS: stream selected PDFs
+    Job->>Job: resolve PDF paths under root
+    Job->>FS: read selected PDFs
     loop each PDF
-        Job->>Inv: extract hash, metadata, ToC, OCR/digital signals
-        Inv-->>Job: DocumentRecord + FileStatRecord
+        Job->>Inv: process_pdf(path, root, config)
+        Inv-->>Job: DocumentRecord
     end
-    Job->>Reg: merge scanned records
-    Reg-->>Job: JobRecord
-    Job->>DB: save Registry snapshot to SQLite
-    DB-->>Client: persisted documents, file_stats, jobs
+    Job->>Reg: merge(records, paths, root, job_id)
+    Reg-->>Job: updated Registry + ScanJobRecord
+    Job->>Store: save(registry)
+    Store->>DB: rewrite current Phase 1 state
 ```
 
-Phase 1 is offline only. It computes deterministic records from the filesystem and writes the
-merged registry to SQLite. JSON is import/export only.
+Phase 1 is an offline batch scan.
+Its current persistence model is SQLite-backed, but the merge still happens through the in-memory
+`Registry` contract.
+
+Current Phase 1 state split:
+
+- canonical document state
+  - `documents`
+  - `document_paths`
+  - `document_toc`
+- batch scan state
+  - `scanned_file_in_job`
+  - `scan_jobs`
+
+Practical meaning:
+
+- `document_paths` answers which relative paths currently belong to a document
+- `scanned_file_in_job` answers what the last scan run saw at a path
+- legacy JSON key for that scan-state map: `file_stats`
+
+`db.json` is not the normal write target anymore.
+It is retained only for import/export and compatibility.
 
 ## Phase 2
 
@@ -54,5 +75,6 @@ sequenceDiagram
     end
 ```
 
-Phase 2 is online and prompt-driven. The scanned Phase 1 document stays canonical. LLM outputs
-are stored as separate suggestion rows with prompt provenance and review/apply state.
+Phase 2 is online and prompt-driven.
+It consumes Phase 1 document state from SQLite and stores prompt-backed suggestions separately from
+the canonical scanned document record.
