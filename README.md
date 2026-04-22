@@ -2,9 +2,9 @@
 
 It processes a local PDF collection in two phases:
 
-- Phase 1 offline: hash files, extract metadata and ToC, detect digital vs scanned PDFs, normalize
+- offline: hash files, extract metadata and ToC, detect digital vs scanned PDFs, normalize
   document names, and persist the registry to SQLite
-- Phase 2 online: run prompt-based LLM workflows against the scanned registry to generate reviewable
+- online: run prompt-based LLM workflows against the scanned registry to generate reviewable
   suggestions such as document attributes and taxonomy classification
 
 The package is library-first. The repo-level `client.py` is an operator helper for local workflows
@@ -74,251 +74,277 @@ uv run alembic upgrade head
 Notes:
 
 - Alembic owns schema evolution; runtime code should not mutate SQLite schema implicitly
-- `migrate-sqlite` imports Phase 1 inventory data from `PDFZX_JSON_DB` into the current SQLite schema
+- `migrate-sqlite` imports offline inventory data from `PDFZX_JSON_DB` into the current SQLite schema
 - if you reset `db.sqlite3`, run `alembic upgrade head` before importing data
 
-## Run
+## Operator Workflows
 
-`client.py` now has explicit commands for import, scan, export, and LLM probing:
+### First-Time Setup
 
-- `migrate-sqlite`
-  - import the legacy `db.json` registry into SQLite
-- `scan`
-  - read the Yazi chooser file and run PDF inventory
-  - writes Phase 1 state to SQLite
-- `backfill`
-  - update `normalised_name` in the existing SQLite-backed registry without rescanning PDFs
-  - `normalised_name` is derived from `file_name`, not metadata title
-  - the normalized value keeps the `.pdf` suffix so it can be used for rename suggestions
-- `export-json`
-  - export the current SQLite-backed registry to a readable JSON snapshot
-- `probe-llm`
-  - run the document-suggestion prompt against one document in SQLite
-  - inspect `prompt_input` and validated `parsed_response`
-  - respects the duplicate gate by default
-- `probe-toc-review`
-  - run the ToC-review prompt against one document in SQLite
-  - judge ToC validity, topical relevance, and likely preface page
-- `probe-taxonomy-partition`
-  - run the proposal-stage taxonomy partition prompt against one taxonomy node's shuffled batches
-  - inspect batch JSON with `categories` and `supporting`
-  - supports repeated `--exclude-path-keyword`
-- `probe-taxonomy-partition-generalize`
-  - run the node-scoped proposal plus generalize flow
-  - inspect the merged final JSON with `categories` and `supporting`
-  - supports repeated `--exclude-path-keyword`
-- `probe-taxonomy-assign`
-  - probe one-by-one document assignment under an existing taxonomy node
-  - supports repeated `--exclude-path-keyword`
-- `run-taxonomy-partition`
-  - run taxonomy partitioning on one node path such as `Root` or `Root/Physics`
-  - bootstraps `Root` on first use, then persists child nodes on later runs
-  - supports repeated `--exclude-path-keyword`
-- `run-taxonomy-assign`
-  - run one-by-one document assignment under an existing taxonomy node
-  - persists `pending` `taxonomy_assignments` rows
-  - supports repeated `--exclude-path-keyword`
-- `show-taxonomy-assignments`
-  - display readable joined assignment rows for one taxonomy node
-  - supports filtering by assignment status
-- `apply-taxonomy-assignments`
-  - move pending high-confidence assignment rows from a parent node into child node memberships
-  - supports repeated `--exclude-path-keyword`
-- `show-taxonomy-node-stats`
-  - display direct document counts grouped by taxonomy node
-- `show-taxonomy-node-documents`
-  - display one taxonomy node's current document memberships with readable document paths
-- `suggest-llm`
-  - run document suggestion over a filtered batch and persist results
-- `suggest-toc-review`
-  - run ToC review over a filtered batch and persist results
-
-Storage roles:
-
-- SQLite (`PDFZX_SQLITE3_DB_PATH`) is now the primary store
-- JSON (`PDFZX_JSON_DB`) is used for import/export, not live scan writes
-
-If you already have an old `db.json`, import it first:
+Goal: create the SQLite schema and import existing registry data.
 
 ```bash
-pdfzx/.venv/bin/python client.py migrate-sqlite --replace
+uv run alembic upgrade head
 ```
 
-Use `yazi` to select files or folders and write the result to an absolute chooser file:
+### Offline Inventory
+
+Goal: scan selected PDFs and update the registry.
 
 ```bash
 yazi "$PDFZX_PDF_ROOT" --chooser-file="$(pwd)/yazi-choice.txt"
+uv run python client.py scan
 ```
 
-Then run the client:
+Check:
 
 ```bash
-pdfzx/.venv/bin/python client.py scan
+uv run python client.py show-duplicate-docs
 ```
 
-Notes:
-
-- `client.py` reads `.env` automatically — just edit it and run
-- `client.py` reads `./yazi-choice.txt` by default
-- `scan` uses `--choice-file`, `--root`, `--db`, `--workers`, and `--log-level`
-- `migrate-sqlite` imports `PDFZX_JSON_DB` into `PDFZX_SQLITE3_DB_PATH`
-- `backfill` updates `normalised_name` in SQLite without rescanning PDFs
-- `export-json` writes a JSON snapshot from SQLite to `PDFZX_JSON_DB` or `--json-db`
-- `PDFZX_ENABLE_NAME_NORMALIZATION=false` disables deterministic name normalization in both scan and backfill flows
-- all LLM probe and batch commands require:
-  - `PDFZX_ONLINE_FEATURES=true`
-  - `PDFZX_OPENAI_API_KEY`
-- single-document probes also require:
-  - a target document `--sha256`
-- `probe-llm --persist` stores the validated suggestion
-- `probe-llm --force` bypasses the same-doc same-prompt duplicate gate
-- `probe-toc-review` uses the same ToC cap and keeps suggestions separate from canonical document fields
-- `PDFZX_PARTITION_SEED` is the stable seed that future taxonomy-partition batching uses to derive a deterministic document order
-- `PDFZX_PARTITION_CHUNK_SIZE` is the default batch size for taxonomy-partition probing
-- `PDFZX_TAXONOMY_EXCLUDE_PATH_KEYWORDS` is a comma-separated default exclude list shared by taxonomy partition, assignment, and apply workflows
-- taxonomy partitioning command details are documented in [`docs/partitioning.md`](docs/partitioning.md)
-- batch suggestion commands support:
-  - `--require-digital`
-  - `--require-toc`
-  - `--limit`
-  - `--force`
-  - `--max-concurrency`
-  - `--output-ndjson`
-- batch NDJSON output is appended during the run as each request completes; it is not buffered until the whole batch finishes
-- keep `--max-concurrency` low at first; `2` or `4` is a practical starting point if you are near API rate limits
-- taxonomy partition commands also support:
-  - repeated `--exclude-path-keyword`
-- taxonomy assignment commands also support:
-  - `--require-digital`
-  - `--require-toc`
-  - `--limit`
-  - `--offset`
-  - repeated `--exclude-path-keyword`
-- `apply-taxonomy-assignments` also supports:
-  - repeated `--exclude-path-keyword`
-- taxonomy exclude keywords come from `PDFZX_TAXONOMY_EXCLUDE_PATH_KEYWORDS` by default, and command-line `--exclude-path-keyword` values override that default list for the current command
-- `run-taxonomy-assign` also supports:
-  - `--force`
-  - `--max-concurrency`
-  - `--output-ndjson`
-
-Example with explicit args:
+Related cleanup:
 
 ```bash
-pdfzx/.venv/bin/python client.py scan --choice-file "$(pwd)/yazi-choice.txt" --workers 4
+uv run python client.py delete-document-paths --input to_del.txt
 ```
 
-Backfill existing registry names only:
+Use this when:
+
+- adding new PDFs to the registry
+- refreshing metadata and scan-state after local file changes
+- cleaning duplicate paths for the same document hash
+
+### Registry Maintenance
+
+Goal: maintain deterministic registry fields without rescanning PDFs.
 
 ```bash
-pdfzx/.venv/bin/python client.py backfill
+uv run python client.py backfill
+uv run python client.py export-json
 ```
 
-Export the current SQLite-backed registry to JSON:
+Use this when:
+
+- `normalised_name` logic changes
+- you want a readable JSON snapshot of the current SQLite registry
+
+### Single-Document LLM Probing
+
+Goal: inspect one prompt request and response before running a batch.
 
 ```bash
-pdfzx/.venv/bin/python client.py export-json
+uv run python client.py probe-llm --sha256 <sha256>
+uv run python client.py probe-toc-review --sha256 <sha256>
 ```
 
-Probe one document against the LLM prompt:
+Persist only when the result is worth keeping:
 
 ```bash
-pdfzx/.venv/bin/python client.py probe-llm --sha256 <sha256>
+uv run python client.py probe-llm --sha256 <sha256> --persist
 ```
 
-Probe and persist one validated suggestion:
+Use this when:
+
+- testing prompt behavior
+- checking one document before spending tokens on a batch
+- verifying `prompt_input` and `parsed_response`
+
+### Batch LLM Suggestions
+
+Goal: run LLM workflows over filtered documents and persist reviewable suggestions.
 
 ```bash
-pdfzx/.venv/bin/python client.py probe-llm --sha256 <sha256> --persist
+uv run python client.py suggest-llm --require-digital --require-toc --limit 50
+uv run python client.py suggest-toc-review --require-digital --limit 50
 ```
 
-Probe one document against the ToC-review prompt:
+Useful controls:
 
 ```bash
-pdfzx/.venv/bin/python client.py probe-toc-review --sha256 <sha256>
+--limit 100
+--max-concurrency 2
+--output-ndjson ndjsons/run.ndjson
+--force
 ```
 
-Probe one shuffled taxonomy-partition batch:
+Use this when:
+
+- the single-document probe looks good
+- you want persisted suggestions for later review
+- you want NDJSON traces for prompt debugging
+
+### Taxonomy Bootstrapping
+
+Goal: create the taxonomy root and inspect current tree state.
 
 ```bash
-pdfzx/.venv/bin/python client.py probe-taxonomy-partition --node-path Root
+uv run python client.py bootstrap-taxonomy-root
+uv run python client.py show-taxonomy-node-stats
+uv run python client.py show-taxonomy-node-documents --node-path Root --limit 50
 ```
 
-Probe three consecutive shuffled batches with batch size 20:
+Use this when:
+
+- starting taxonomy work for the first time
+- checking whether documents are attached to `Root`
+- checking document counts by node
+
+### Taxonomy Partitioning
+
+Goal: create child categories for one taxonomy node.
+
+First probe the proposed categories:
 
 ```bash
-pdfzx/.venv/bin/python client.py probe-taxonomy-partition --node-path Root --chunk-size 20 --batch-offset 0 --batch-count 3
+uv run python client.py probe-taxonomy-partition --node-path Root --chunk-size 50 --batch-offset 0 --batch-count 1
 ```
 
-Probe final taxonomy generalization over shuffled batches:
+Then probe the merged category result:
 
 ```bash
-pdfzx/.venv/bin/python client.py probe-taxonomy-partition-generalize --node-path Root --chunk-size 500 --batch-offset 0 --batch-count 7
+uv run python client.py probe-taxonomy-partition-generalize --node-path Root --chunk-size 500 --batch-offset 0 --batch-count 3
 ```
 
-Run taxonomy partitioning on the root node:
+Then persist child nodes:
 
 ```bash
-pdfzx/.venv/bin/python client.py run-taxonomy-partition --node-path Root --chunk-size 500 --batch-offset 0 --batch-count 7
+uv run python client.py run-taxonomy-partition --node-path Root --chunk-size 500 --batch-offset 0 --batch-count 3
 ```
 
-Exclude manual path buckets during partition probing or runs:
+Check:
 
 ```bash
-pdfzx/.venv/bin/python client.py probe-taxonomy-partition --node-path Root --exclude-path-keyword lectures --exclude-path-keyword archive --exclude-path-keyword inbox --exclude-path-keyword misc
+uv run python client.py show-taxonomy-node-stats --depth 1
+uv run python client.py show-taxonomy-node-terms
 ```
 
-Probe taxonomy assignment under the root node:
+Use this when:
+
+- a node has too many documents
+- you want broad child categories plus review terms
+- you want to manually adjust child nodes before assignment
+
+### Taxonomy Assignment
+
+Goal: assign documents from a parent node into existing child nodes.
+
+Probe first:
 
 ```bash
-pdfzx/.venv/bin/python client.py probe-taxonomy-assign --node-path Root --limit 10 --offset 0 --exclude-path-keyword lectures --exclude-path-keyword archive
+uv run python client.py probe-taxonomy-assign --node-path Root --limit 10 --offset 0
 ```
 
-Run taxonomy assignment over filtered documents under the root node:
+Run and persist pending assignments:
 
 ```bash
-pdfzx/.venv/bin/python client.py run-taxonomy-assign --node-path Root --require-digital --require-toc --limit 100 --offset 0 --max-concurrency 5 --exclude-path-keyword lectures --exclude-path-keyword archive
+uv run python client.py run-taxonomy-assign --node-path Root --limit 100 --offset 0 --max-concurrency 2
 ```
 
-Show readable taxonomy assignment rows:
+Review:
 
 ```bash
-pdfzx/.venv/bin/python client.py show-taxonomy-assignments --node-path Root --limit 50 --offset 0
+uv run python client.py show-taxonomy-assignments --node-path Root --status pending --limit 50
 ```
 
-Show only pending taxonomy assignment rows:
+Apply:
 
 ```bash
-pdfzx/.venv/bin/python client.py show-taxonomy-assignments --node-path Root --status pending --limit 50 --offset 0
+uv run python client.py apply-taxonomy-assignments --node-path Root --minimum-confidence high
 ```
 
-Apply pending high-confidence assignments while excluding manual path buckets:
+Check:
 
 ```bash
-pdfzx/.venv/bin/python client.py apply-taxonomy-assignments --node-path Root --minimum-confidence high --exclude-path-keyword lectures --exclude-path-keyword archive --exclude-path-keyword inbox --exclude-path-keyword misc
+uv run python client.py show-taxonomy-node-stats
+uv run python client.py show-taxonomy-node-documents --node-path Root/SomeChild --limit 50
 ```
 
-Show direct document counts grouped by taxonomy node:
+Use this when:
+
+- child nodes already exist
+- assignment prompt behavior has been probed
+- you want a review/apply step instead of direct movement
+
+### File Watching
+
+Goal: observe filesystem changes under `PDFZX_PDF_ROOT`.
 
 ```bash
-pdfzx/.venv/bin/python client.py show-taxonomy-node-stats --depth 1
+uv run python client.py watch
 ```
 
-Show one node's current document memberships with readable paths:
+Use this when:
+
+- studying raw and routed file events
+- preparing manual file-operation reconciliation
+- validating watcher behavior before wiring more state transitions
+
+### Review Commands
+
+Use these to inspect the system before and after each workflow:
 
 ```bash
-pdfzx/.venv/bin/python client.py show-taxonomy-node-documents --node-path Root/Physics --limit 50 --offset 0
+uv run python client.py show-duplicate-docs
+uv run python client.py show-taxonomy-node-stats
+uv run python client.py show-taxonomy-node-documents --node-path Root --limit 50
+uv run python client.py show-taxonomy-node-terms
+uv run python client.py show-taxonomy-assignments --node-path Root --status pending
 ```
 
-For taxonomy assignment, `--output-ndjson` writes one JSON line per item as it completes, including:
+### Recommended Order
 
-- `workflow`
-- `sha256`
-- `status`
-- `reason`
-- `prompt_input`
-- `parsed_response`
-- `persisted`
+For a new or restored local registry:
+
+1. `alembic upgrade head` — make sure the SQLite schema matches the current code.
+2. `migrate-sqlite --replace` — import the JSON registry into SQLite; back up the DB first if you are not sure.
+3. `scan` — refresh offline inventory facts from selected PDFs.
+4. `show-duplicate-docs` — inspect documents whose `sha256` has multiple paths.
+5. `delete-document-paths` — remove duplicate path rows and matching files after review.
+6. `bootstrap-taxonomy-root` — create `Root` and attach current document hashes.
+7. `probe-taxonomy-partition` — inspect the proposal-stage LLM output before persisting child nodes.
+8. `probe-taxonomy-partition-generalize` — inspect the merged category output across batches.
+9. `run-taxonomy-partition` — persist child taxonomy nodes from the merged result.
+10. Manually review or adjust child nodes if needed before assignment.
+11. `probe-taxonomy-assign` — inspect document-to-child assignment LLM output before persisting rows.
+12. `run-taxonomy-assign` — persist pending assignment rows for review.
+13. `show-taxonomy-assignments` — review pending, applied, rejected, or manually touched assignments.
+14. `apply-taxonomy-assignments` — apply reviewed pending assignments into node memberships.
+
+## Command Reference
+
+Use help for the full command and flag list:
+
+```bash
+uv run python client.py --help
+uv run python client.py <command> --help
+```
+
+Key docs:
+
+- duplicate inspection and cleanup: [`docs/duplicates_show_delete.md`](docs/duplicates_show_delete.md)
+- LLM workflow behavior: [`docs/llm_workflows.md`](docs/llm_workflows.md)
+- taxonomy partition and assignment: [`docs/partitioning.md`](docs/partitioning.md)
+
+Common command groups:
+
+- registry: `migrate-sqlite`, `scan`, `backfill`, `export-json`
+- duplicate cleanup: `show-duplicate-docs`, `delete-document-paths`
+- LLM suggestions: `probe-llm`, `suggest-llm`, `probe-toc-review`, `suggest-toc-review`
+- taxonomy partitioning: `bootstrap-taxonomy-root`, `probe-taxonomy-partition`, `probe-taxonomy-partition-generalize`, `run-taxonomy-partition`
+- taxonomy assignment: `probe-taxonomy-assign`, `run-taxonomy-assign`, `show-taxonomy-assignments`, `apply-taxonomy-assignments`
+- taxonomy inspection: `show-taxonomy-node-stats`, `show-taxonomy-node-documents`, `show-taxonomy-node-terms`
+- filesystem observation: `watch`
+
+LLM commands require:
+
+- `PDFZX_ONLINE_FEATURES=true`
+- `PDFZX_OPENAI_API_KEY`
+
+Useful shared controls:
+
+- batch commands support `--limit`, `--force`, `--max-concurrency`, and `--output-ndjson`
+- taxonomy commands support repeated `--exclude-path-keyword`
+- `PDFZX_TAXONOMY_EXCLUDE_PATH_KEYWORDS` provides the default taxonomy exclude list
 
 ## Test
 

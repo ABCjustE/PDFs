@@ -161,13 +161,16 @@ def test_list_duplicate_documents_returns_documents_with_multiple_paths(
     )
     SqliteStorage(sqlite_db).save(registry)
 
-    rows = list_duplicate_documents(sqlite_db)
+    result = list_duplicate_documents(sqlite_db)
 
-    assert len(rows) == 1
-    assert rows[0].sha256 == "dup"
-    assert rows[0].file_name == "dup.pdf"
-    assert rows[0].path_count == 2
-    assert rows[0].rel_paths == ["a/dup.pdf", "b/dup.pdf"]
+    assert result.total == 1
+    assert result.limit is None
+    assert result.offset == 0
+    assert len(result.rows) == 1
+    assert result.rows[0].sha256 == "dup"
+    assert result.rows[0].file_name == "dup.pdf"
+    assert result.rows[0].path_count == 2
+    assert result.rows[0].rel_paths == ["a/dup.pdf", "b/dup.pdf"]
 
 
 def test_list_duplicate_documents_respects_limit_and_offset(tmp_path: Path) -> None:
@@ -190,7 +193,10 @@ def test_list_duplicate_documents_respects_limit_and_offset(tmp_path: Path) -> N
     )
     SqliteStorage(sqlite_db).save(registry)
 
-    rows = list_duplicate_documents(sqlite_db, limit=1, offset=1)
+    result = list_duplicate_documents(sqlite_db, limit=1, offset=1)
 
-    assert len(rows) == 1
-    assert rows[0].sha256 == "b" * 64
+    assert result.total == 2
+    assert result.limit == 1
+    assert result.offset == 1
+    assert len(result.rows) == 1
+    assert result.rows[0].sha256 == "b" * 64

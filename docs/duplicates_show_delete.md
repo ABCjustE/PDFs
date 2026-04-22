@@ -28,12 +28,14 @@ uv run python client.py show-duplicate-docs --limit 50 --offset 0
 Current behavior:
 
 - default output is unlimited
+- output starts with the viewed range and total duplicate document count
 - each duplicate document is shown as a block
 - each duplicate path is printed on its own line
 
 Example shape:
 
 ```text
+Showing duplicate documents 1-1 of 1
 some-book.pdf (2 paths)
   shelf-a/some-book.pdf
   shelf-b/some-book.pdf

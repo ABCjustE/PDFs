@@ -463,11 +463,14 @@ def _show_duplicate_documents(
     limit: int | None,
     offset: int,
 ) -> str:
-    rows = list_duplicate_documents(sqlite_db_path, limit=limit, offset=offset)
-    if not rows:
+    result = list_duplicate_documents(sqlite_db_path, limit=limit, offset=offset)
+    if not result.rows:
         return "No duplicate documents found."
-    blocks: list[str] = []
-    for row in rows:
+    upper_bound = offset + len(result.rows)
+    blocks = [
+        f"Showing duplicate documents {offset + 1}-{upper_bound} of {result.total}"
+    ]
+    for row in result.rows:
         blocks.append(f"{row.file_name} ({row.path_count} paths)")
         blocks.extend(f"  {path}" for path in row.rel_paths)
     return "\n".join(blocks)

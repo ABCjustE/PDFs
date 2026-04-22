@@ -26,6 +26,16 @@ class DuplicateDocumentView:
     rel_paths: list[str]
 
 
+@dataclass(frozen=True, slots=True)
+class DuplicateDocumentResult:
+    """Paged duplicate-document query result."""
+
+    rows: list[DuplicateDocumentView]
+    total: int
+    limit: int | None
+    offset: int
+
+
 def list_document_sha256s(sqlite_db_path: Path) -> list[str]:
     """Return all document hashes in stable order."""
     return _run_sha256_query(sqlite_db_path, select(Document.sha256).order_by(Document.sha256))
@@ -51,24 +61,32 @@ def list_duplicate_documents(
     *,
     limit: int | None = None,
     offset: int = 0,
-) -> list[DuplicateDocumentView]:
+) -> DuplicateDocumentResult:
     """Return documents that currently have more than one path."""
     engine = create_sqlite_engine(sqlite_db_path)
     try:
         with Session(engine) as session:
+            duplicate_sha256_stmt = (
+                select(Document.sha256)
+                .join(DocumentPath)
+                .group_by(Document.sha256)
+                .having(func.count(DocumentPath.id) > 1)
+            )
+            total = len(list(session.scalars(duplicate_sha256_stmt)))
             duplicate_sha256s = list(
                 session.scalars(
-                    select(Document.sha256)
-                    .join(DocumentPath)
-                    .group_by(Document.sha256)
-                    .having(func.count(DocumentPath.id) > 1)
-                    .order_by(Document.sha256)
+                    duplicate_sha256_stmt.order_by(Document.sha256)
                     .offset(offset)
                     .limit(limit)
                 )
             )
             if not duplicate_sha256s:
-                return []
+                return DuplicateDocumentResult(
+                    rows=[],
+                    total=total,
+                    limit=limit,
+                    offset=offset,
+                )
             documents = list(
                 session.scalars(
                     select(Document)
@@ -79,15 +97,20 @@ def list_duplicate_documents(
             )
     finally:
         engine.dispose()
-    return [
-        DuplicateDocumentView(
-            sha256=document.sha256,
-            file_name=document.file_name,
-            path_count=len(document.paths),
-            rel_paths=sorted(path.rel_path for path in document.paths),
-        )
-        for document in documents
-    ]
+    return DuplicateDocumentResult(
+        rows=[
+            DuplicateDocumentView(
+                sha256=document.sha256,
+                file_name=document.file_name,
+                path_count=len(document.paths),
+                rel_paths=sorted(path.rel_path for path in document.paths),
+            )
+            for document in documents
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 def _run_sha256_query(sqlite_db_path: Path, stmt) -> list[str]:
