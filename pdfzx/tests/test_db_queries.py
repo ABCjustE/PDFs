@@ -6,7 +6,9 @@ from sqlalchemy.orm import Session
 
 from pdfzx.db.models import Document
 from pdfzx.db.models import DocumentTocEntry
+from pdfzx.db.queries import DocumentPathView
 from pdfzx.db.queries import list_candidate_document_sha256s
+from pdfzx.db.queries import list_document_paths
 from pdfzx.db.queries import list_document_sha256s
 from pdfzx.db.queries import list_duplicate_documents
 from pdfzx.db.session import create_sqlite_engine
@@ -200,3 +202,25 @@ def test_list_duplicate_documents_respects_limit_and_offset(tmp_path: Path) -> N
     assert result.offset == 1
     assert len(result.rows) == 1
     assert result.rows[0].sha256 == "b" * 64
+
+
+def test_list_document_paths_returns_stable_rows(tmp_path: Path) -> None:
+    sqlite_db = tmp_path / "db.sqlite3"
+    registry = Registry(
+        documents={
+            "dup": DocumentRecord(
+                sha256="dup",
+                md5="m" * 32,
+                file_name="dup.pdf",
+                paths=["b/dup.pdf", "a/dup.pdf"],
+            )
+        }
+    )
+    SqliteStorage(sqlite_db).save(registry)
+
+    rows = list_document_paths(sqlite_db)
+
+    assert rows == [
+        DocumentPathView(sha256="dup", file_name="dup.pdf", rel_path="a/dup.pdf"),
+        DocumentPathView(sha256="dup", file_name="dup.pdf", rel_path="b/dup.pdf"),
+    ]

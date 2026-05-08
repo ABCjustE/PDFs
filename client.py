@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 import threading
@@ -29,12 +30,14 @@ from pdfzx.config import DEFAULT_LLM_MAX_TOC_ENTRIES
 from pdfzx.config import DEFAULT_PARTITION_CHUNK_SIZE
 from pdfzx.config import DEFAULT_PARTITION_SEED
 from pdfzx.config import ScanConfig
-from pdfzx.db.queries import list_duplicate_documents
 from pdfzx.db.migration import migrate_json_to_sqlite
+from pdfzx.db.queries import list_document_paths
 from pdfzx.db.queries import list_document_sha256s
+from pdfzx.db.queries import list_duplicate_documents
 from pdfzx.db.repositories import DocumentPathRepository
 from pdfzx.db.repositories import TaxonomyTreeRepository
 from pdfzx.db.session import create_sqlite_engine
+from pdfzx.db.session import init_sqlite_db
 from pdfzx.llm_suggestion import batch_document_suggestion
 from pdfzx.llm_suggestion import probe_document_suggestion
 from pdfzx.llm_toc_review import batch_toc_review_suggestion
@@ -51,6 +54,8 @@ from pdfzx.prompts.taxonomy_partition_generalize import TaxonomyPartitionGeneral
 from pdfzx.prompts.taxonomy_partition_proposal import build_sampled_document_summary
 from pdfzx.storage import JsonStorage
 from pdfzx.storage import SqliteStorage
+from pdfzx.utils import compute_hashes
+from pdfzx.watch import WatchService
 from pdfzx.watch import run_watch_process
 
 
@@ -476,6 +481,135 @@ def _show_duplicate_documents(
     return "\n".join(blocks)
 
 
+def _show_document_path_drift(config: ScanConfig) -> dict[str, object]:
+    init_sqlite_db(config.sqlite3_db_path)
+    db_rows = list_document_paths(config.sqlite3_db_path)
+    root = config.root_path.resolve()
+    db_by_rel_path = {row.rel_path: row for row in db_rows}
+    db_paths_by_sha256: dict[str, list[str]] = {}
+    for row in db_rows:
+        db_paths_by_sha256.setdefault(row.sha256, []).append(row.rel_path)
+    fs_by_rel_path: dict[str, str] = {}
+    for path in sorted(root.rglob("*.pdf")):
+        if not path.is_file():
+            continue
+        rel_path = str(path.resolve().relative_to(root))
+        fs_by_rel_path[rel_path] = compute_hashes(path)["sha256"]
+    known_hash_missing_path = [
+        {
+            "rel_path": rel_path,
+            "sha256": sha256,
+            "known_rel_paths": sorted(db_paths_by_sha256[sha256]),
+        }
+        for rel_path, sha256 in fs_by_rel_path.items()
+        if rel_path not in db_by_rel_path and sha256 in db_paths_by_sha256
+    ]
+    missing_hash = [
+        {"rel_path": rel_path, "sha256": sha256}
+        for rel_path, sha256 in fs_by_rel_path.items()
+        if rel_path not in db_by_rel_path and sha256 not in db_paths_by_sha256
+    ]
+    missing_on_disk = [
+        {"rel_path": row.rel_path, "sha256": row.sha256, "file_name": row.file_name}
+        for row in db_rows
+        if row.rel_path not in fs_by_rel_path
+    ]
+    hash_mismatch = [
+        {
+            "rel_path": row.rel_path,
+            "db_sha256": row.sha256,
+            "fs_sha256": fs_by_rel_path[row.rel_path],
+            "file_name": row.file_name,
+        }
+        for row in db_rows
+        if row.rel_path in fs_by_rel_path and row.sha256 != fs_by_rel_path[row.rel_path]
+    ]
+    return {
+        "root_path": str(root),
+        "sqlite_db_path": str(config.sqlite3_db_path.resolve()),
+        "db_path_count": len(db_rows),
+        "filesystem_path_count": len(fs_by_rel_path),
+        "known_hash_missing_path": known_hash_missing_path,
+        "missing_hash": missing_hash,
+        "missing_on_disk": missing_on_disk,
+        "hash_mismatch": hash_mismatch,
+    }
+
+
+def _reconcile_document_paths(config: ScanConfig) -> dict[str, object]:
+    drift = _show_document_path_drift(config)
+    service = WatchService(
+        root=config.root_path,
+        config=config,
+        logger=logging.getLogger("pdfzx.watch"),
+    )
+    discovered: list[str] = []
+    removed: list[str] = []
+    failed: list[dict[str, str]] = []
+    try:
+        for row in drift["missing_hash"]:
+            rel_path = row["rel_path"]
+            assert isinstance(rel_path, str)
+            try:
+                service.handle_path_discovered(rel_path=rel_path)
+            except Exception as exc:
+                failed.append(
+                    {
+                        "op": "discover",
+                        "rel_path": rel_path,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    }
+                )
+            else:
+                discovered.append(rel_path)
+        for row in drift["known_hash_missing_path"]:
+            rel_path = row["rel_path"]
+            assert isinstance(rel_path, str)
+            try:
+                service.handle_path_discovered(rel_path=rel_path)
+            except Exception as exc:
+                failed.append(
+                    {
+                        "op": "discover",
+                        "rel_path": rel_path,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    }
+                )
+            else:
+                discovered.append(rel_path)
+        for row in drift["missing_on_disk"]:
+            rel_path = row["rel_path"]
+            assert isinstance(rel_path, str)
+            try:
+                service.handle_path_missing(rel_path=rel_path)
+            except Exception as exc:
+                failed.append(
+                    {
+                        "op": "remove",
+                        "rel_path": rel_path,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    }
+                )
+            else:
+                removed.append(rel_path)
+    finally:
+        service.close()
+    return {
+        "root_path": drift["root_path"],
+        "sqlite_db_path": drift["sqlite_db_path"],
+        "discovered_count": len(discovered),
+        "removed_count": len(removed),
+        "failed_count": len(failed),
+        "discovered_rel_paths": discovered,
+        "removed_rel_paths": removed,
+        "failed": failed,
+        "precheck": drift,
+    }
+
+
 def _delete_document_paths(
     config: ScanConfig,
     *,
@@ -511,7 +645,9 @@ def _delete_document_paths(
                         "file_deleted": file_deleted,
                         "db_deleted": deleted is not None,
                         "sha256": db_sha256 if deleted is None else deleted.sha256,
-                        "removed_scan_state": False if deleted is None else deleted.removed_scan_state,
+                        "removed_scan_state": (
+                            False if deleted is None else deleted.removed_scan_state
+                        ),
                         "remaining_paths": None if deleted is None else deleted.remaining_paths,
                     }
                 )
@@ -1500,7 +1636,10 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
         "delete-document-paths",
         parents=[_base_parser(default_config)],
         add_help=False,
-        help="Delete PDF files and matching document path rows from direct relative paths or an input file.",
+        help=(
+            "Delete PDF files and matching document path rows from direct relative "
+            "paths or an input file."
+        ),
     )
     delete_paths_parser.add_argument(
         "--input",
@@ -1531,6 +1670,21 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
         type=int,
         default=0,
         help="Start offset into the duplicate-document rows.",
+    )
+    subparsers.add_parser(
+        "show-document-path-drift",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help="Compare current filesystem PDF paths against document_paths without mutating SQLite.",
+    )
+    subparsers.add_parser(
+        "reconcile-document-paths",
+        parents=[_base_parser(default_config)],
+        add_help=False,
+        help=(
+            "Apply filesystem-vs-document_paths reconciliation for missing hashes "
+            "and stale paths."
+        ),
     )
     review_parser = subparsers.add_parser(
         "export-review-json",
@@ -1879,6 +2033,12 @@ def main() -> int:  # noqa: C901,PLR0911,PLR0912,PLR0915
                 offset=args.offset,
             )
         )
+        return 0
+    if args.command == "show-document-path-drift":
+        _emit_json(_show_document_path_drift(config))
+        return 0
+    if args.command == "reconcile-document-paths":
+        _emit_json(_reconcile_document_paths(config))
         return 0
     if args.command == "export-review-json":
         payload = _export_review_json(

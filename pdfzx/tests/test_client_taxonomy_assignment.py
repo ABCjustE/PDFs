@@ -15,6 +15,9 @@ from pdfzx.db.repositories.taxonomy_tree import TaxonomyTreeRepository
 from pdfzx.db.session import create_sqlite_engine
 from pdfzx.db.session import init_sqlite_db
 from pdfzx.models import DocumentRecord
+from pdfzx.models import Registry
+from pdfzx.storage import SqliteStorage
+from pdfzx.utils import compute_hashes
 
 CLIENT_PATH = Path(__file__).resolve().parents[2] / "client.py"
 CLIENT_SPEC = importlib.util.spec_from_file_location("pdfzx_client", CLIENT_PATH)
@@ -216,6 +219,155 @@ def test_taxonomy_exclude_path_keywords_prefers_cli_over_config() -> None:
         "archive",
         "private",
     ]
+
+
+def test_show_document_path_drift_reports_unsynced_paths(tmp_path: Path) -> None:
+    pdf_root = tmp_path / "pdf_root"
+    pdf_root.mkdir()
+    db_path = tmp_path / "db.sqlite3"
+
+    only_db = DocumentRecord(
+        sha256="a" * 64,
+        md5="b" * 32,
+        file_name="only-db.pdf",
+        paths=["Books/only-db.pdf"],
+    )
+    mismatch_db = DocumentRecord(
+        sha256="c" * 64,
+        md5="d" * 32,
+        file_name="mismatch.pdf",
+        paths=["Books/mismatch.pdf"],
+    )
+    SqliteStorage(db_path).save(
+        Registry(documents={only_db.sha256: only_db, mismatch_db.sha256: mismatch_db})
+    )
+
+    only_fs_path = pdf_root / "Books" / "only-fs.pdf"
+    only_fs_path.parent.mkdir(parents=True)
+    only_fs_path.write_bytes(b"only fs")
+
+    mismatch_path = pdf_root / "Books" / "mismatch.pdf"
+    mismatch_path.write_bytes(b"actual mismatch")
+
+    config = ScanConfig(root_path=pdf_root, db_path=tmp_path / "db.json", sqlite3_db_path=db_path)
+
+    result = client._show_document_path_drift(config)  # noqa: SLF001
+
+    assert result["db_path_count"] == 2
+    assert result["filesystem_path_count"] == 2
+    assert result["known_hash_missing_path"] == []
+    assert result["missing_hash"] == [
+        {
+            "rel_path": "Books/only-fs.pdf",
+            "sha256": compute_hashes(only_fs_path)["sha256"],
+        }
+    ]
+    assert result["missing_on_disk"] == [
+        {
+            "rel_path": "Books/only-db.pdf",
+            "sha256": "a" * 64,
+            "file_name": "only-db.pdf",
+        }
+    ]
+    assert len(result["hash_mismatch"]) == 1
+    assert result["hash_mismatch"][0]["rel_path"] == "Books/mismatch.pdf"
+    assert result["hash_mismatch"][0]["db_sha256"] == "c" * 64
+
+
+def test_show_document_path_drift_reports_known_hash_missing_path(tmp_path: Path) -> None:
+    pdf_root = tmp_path / "pdf_root"
+    pdf_root.mkdir()
+    db_path = tmp_path / "db.sqlite3"
+    existing_path = pdf_root / "Books" / "known.pdf"
+    existing_path.parent.mkdir(parents=True)
+    existing_path.write_bytes(b"known")
+    known_sha256 = compute_hashes(existing_path)["sha256"]
+    SqliteStorage(db_path).save(
+        Registry(
+            documents={
+                known_sha256: DocumentRecord(
+                    sha256=known_sha256,
+                    md5="b" * 32,
+                    file_name="known.pdf",
+                    paths=["Books/known.pdf"],
+                )
+            }
+        )
+    )
+    copied_path = pdf_root / "Books" / "renamed-known.pdf"
+    copied_path.write_bytes(existing_path.read_bytes())
+    config = ScanConfig(root_path=pdf_root, db_path=tmp_path / "db.json", sqlite3_db_path=db_path)
+
+    result = client._show_document_path_drift(config)  # noqa: SLF001
+
+    assert result["missing_hash"] == []
+    assert result["known_hash_missing_path"] == [
+        {
+            "rel_path": "Books/renamed-known.pdf",
+            "sha256": known_sha256,
+            "known_rel_paths": ["Books/known.pdf"],
+        }
+    ]
+
+
+def test_reconcile_document_paths_applies_known_hash_and_stale_path(
+    make_pdf, pdf_root: Path, tmp_path: Path
+) -> None:
+    db_path = tmp_path / "db.sqlite3"
+    old_path = pdf_root / "Books" / "Apple Training.pdf"
+    old_path.parent.mkdir(parents=True)
+    original = make_pdf("original.pdf", ["apple"])
+    original.rename(old_path)
+    original_bytes = old_path.read_bytes()
+    known_sha256 = compute_hashes(old_path)["sha256"]
+    SqliteStorage(db_path).save(
+        Registry(
+            documents={
+                known_sha256: DocumentRecord(
+                    sha256=known_sha256,
+                    md5="b" * 32,
+                    file_name="Apple Training.pdf",
+                    paths=["Books/Apple Training.pdf"],
+                )
+            }
+        )
+    )
+    old_path.unlink()
+    new_path = pdf_root / "Books" / "macOS Support Essentials 10.14.pdf"
+    new_path.write_bytes(original_bytes)
+    config = ScanConfig(root_path=pdf_root, db_path=tmp_path / "db.json", sqlite3_db_path=db_path)
+
+    result = client._reconcile_document_paths(config)  # noqa: SLF001
+
+    assert result["discovered_rel_paths"] == ["Books/macOS Support Essentials 10.14.pdf"]
+    assert result["removed_rel_paths"] == ["Books/Apple Training.pdf"]
+    storage = SqliteStorage(db_path)
+    registry = storage.load()
+    document = registry.documents[known_sha256]
+    assert document.file_name == "macOS Support Essentials 10.14.pdf"
+    assert document.paths == ["Books/macOS Support Essentials 10.14.pdf"]
+
+
+def test_reconcile_document_paths_continues_after_discovery_failure(
+    make_pdf, tmp_path: Path
+) -> None:
+    pdf_root = tmp_path / "pdf_root"
+    pdf_root.mkdir()
+    db_path = tmp_path / "db.sqlite3"
+    broken_path = pdf_root / "Books" / "broken.pdf"
+    ok_path = pdf_root / "Books" / "ok.pdf"
+    broken_path.parent.mkdir(parents=True)
+    broken_path.write_bytes(b"")
+    valid_pdf = make_pdf("ok.pdf", ["ok"])
+    valid_pdf.rename(ok_path)
+    config = ScanConfig(root_path=pdf_root, db_path=tmp_path / "db.json", sqlite3_db_path=db_path)
+
+    result = client._reconcile_document_paths(config)  # noqa: SLF001
+
+    assert result["discovered_rel_paths"] == ["Books/ok.pdf"]
+    assert result["failed_count"] == 1
+    assert result["failed"][0]["rel_path"] == "Books/broken.pdf"
+    assert result["failed"][0]["error_type"] == "EmptyFileError"
 
 
 def test_main_probe_taxonomy_assign_uses_config_exclude_keywords(

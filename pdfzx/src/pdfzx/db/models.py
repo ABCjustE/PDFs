@@ -27,7 +27,7 @@ class Document(Base):
 
     sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
     md5: Mapped[str] = mapped_column(String(32), nullable=False)
-    file_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    file_name: Mapped[str] = mapped_column(String(512), nullable=False) # not canonical, just representative
     normalised_name: Mapped[str | None] = mapped_column(String(512))
     llm_enriched_name: Mapped[str | None] = mapped_column(String(512))
     metadata_title: Mapped[str | None] = mapped_column(String(512))

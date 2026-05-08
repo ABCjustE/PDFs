@@ -157,25 +157,26 @@ class WatchService:
             rel_path = operation.src_rel_path or operation.dest_rel_path
             if rel_path is None:
                 return
-            self._handle_path_discovered(rel_path=rel_path)
+            self.handle_path_discovered(rel_path=rel_path)
             return
         if operation.operation == "path_moved":
             if operation.src_rel_path is None or operation.dest_rel_path is None:
                 return
-            self._handle_path_moved(
+            self.handle_path_moved(
                 old_rel_path=operation.src_rel_path,
                 new_rel_path=operation.dest_rel_path,
             )
             return
         if operation.operation == "path_missing" and operation.src_rel_path is not None:
-            self._handle_path_missing(rel_path=operation.src_rel_path)
+            self.handle_path_missing(rel_path=operation.src_rel_path)
 
     def close(self) -> None:
         """Dispose the cached SQLite engine."""
         if self._engine is not None:
             self._engine.dispose()
 
-    def _handle_path_discovered(self, *, rel_path: str) -> None:
+    def handle_path_discovered(self, *, rel_path: str) -> None:
+        """Scan one current PDF path and ensure its document/path rows exist."""
         assert self._config is not None
         assert self._engine is not None
         record = process_pdf(self._root / rel_path, self._root, self._config)
@@ -188,10 +189,15 @@ class WatchService:
                     "watch.db",
                     extra={"op": "document_created", "sha256": record.sha256, "path": rel_path},
                 )
+            else:
+                document = documents.get_by_sha256(sha256=record.sha256)
+                assert document is not None
+                document.file_name = Path(rel_path).name
             paths.upsert(sha256=record.sha256, rel_path=rel_path)
             session.commit()
 
-    def _handle_path_moved(self, *, old_rel_path: str, new_rel_path: str) -> None:
+    def handle_path_moved(self, *, old_rel_path: str, new_rel_path: str) -> None:
+        """Move one known document path, or fall back to discovery on the destination."""
         assert self._config is not None
         assert self._engine is not None
         with Session(self._engine) as session:
@@ -199,7 +205,7 @@ class WatchService:
             sha256 = paths.move(old_rel_path=old_rel_path, new_rel_path=new_rel_path)
             if sha256 is None:
                 session.rollback()
-                self._handle_path_discovered(rel_path=new_rel_path)
+                self.handle_path_discovered(rel_path=new_rel_path)
                 return
             session.commit()
             self._logger.info(
@@ -212,7 +218,8 @@ class WatchService:
                 },
             )
 
-    def _handle_path_missing(self, *, rel_path: str) -> None:
+    def handle_path_missing(self, *, rel_path: str) -> None:
+        """Remove one stale document path row while keeping the document hash record."""
         assert self._config is not None
         assert self._engine is not None
         with Session(self._engine) as session:

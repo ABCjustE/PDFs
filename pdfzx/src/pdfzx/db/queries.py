@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import func
 from sqlalchemy import select
@@ -34,6 +35,15 @@ class DuplicateDocumentResult:
     total: int
     limit: int | None
     offset: int
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentPathView:
+    """Readable document-path row with owning hash and representative file name."""
+
+    sha256: str
+    rel_path: str
+    file_name: str
 
 
 def list_document_sha256s(sqlite_db_path: Path) -> list[str]:
@@ -113,7 +123,27 @@ def list_duplicate_documents(
     )
 
 
-def _run_sha256_query(sqlite_db_path: Path, stmt) -> list[str]:
+def list_document_paths(sqlite_db_path: Path) -> list[DocumentPathView]:
+    """Return all canonical document-path rows in stable relative-path order."""
+    engine = create_sqlite_engine(sqlite_db_path)
+    try:
+        with Session(engine) as session:
+            rows = list(
+                session.execute(
+                    select(Document.sha256, Document.file_name, DocumentPath.rel_path)
+                    .join(DocumentPath)
+                    .order_by(DocumentPath.rel_path)
+                )
+            )
+    finally:
+        engine.dispose()
+    return [
+        DocumentPathView(sha256=sha256, file_name=file_name, rel_path=rel_path)
+        for sha256, file_name, rel_path in rows
+    ]
+
+
+def _run_sha256_query(sqlite_db_path: Path, stmt: Any) -> list[str]:
     """Execute a scalar sha256 query with managed engine/session lifecycle."""
     engine = create_sqlite_engine(sqlite_db_path)
     try:
