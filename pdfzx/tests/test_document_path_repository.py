@@ -112,3 +112,33 @@ def test_document_path_repository_can_lookup_sha256_by_rel_path(tmp_path) -> Non
             assert repo.get_sha256_by_rel_path(rel_path="a/a.pdf") == "a"
     finally:
         engine.dispose()
+
+
+def test_document_path_repository_can_upsert_and_move(tmp_path) -> None:
+    db_path = tmp_path / "db.sqlite3"
+    init_sqlite_db(db_path)
+    engine = create_sqlite_engine(db_path)
+    try:
+        with Session(engine) as session:
+            session.add(
+                Document(
+                    sha256="a",
+                    md5="a" * 32,
+                    file_name="a.pdf",
+                    metadata_extra_json={},
+                    languages_json=[],
+                    is_digital=True,
+                    force_extracted=False,
+                )
+            )
+            session.commit()
+
+            repo = DocumentPathRepository(session)
+            repo.upsert(sha256="a", rel_path="a/a.pdf")
+            assert repo.get_sha256_by_rel_path(rel_path="a/a.pdf") == "a"
+            assert repo.move(old_rel_path="a/a.pdf", new_rel_path="b/a-renamed.pdf") == "a"
+            assert repo.get_sha256_by_rel_path(rel_path="a/a.pdf") is None
+            assert repo.get_sha256_by_rel_path(rel_path="b/a-renamed.pdf") == "a"
+            assert session.get(Document, "a").file_name == "a-renamed.pdf"
+    finally:
+        engine.dispose()

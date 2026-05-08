@@ -270,14 +270,26 @@ Use this when:
 Goal: observe filesystem changes under `PDFZX_PDF_ROOT`.
 
 ```bash
-uv run python client.py watch
+uv run python client.py watch --log-level INFO
+```
+
+Use `DEBUG` when you want raw watchdog events too:
+
+```bash
+uv run python client.py watch --log-level DEBUG
 ```
 
 Use this when:
 
-- studying raw and routed file events
+- observing routed file events for `created`, `moved`, and `deleted`
 - preparing manual file-operation reconciliation
 - validating watcher behavior before wiring more state transitions
+
+Notes:
+
+- `watch.route` logs are emitted at `INFO`
+- `watch.raw` logs are emitted at `DEBUG`
+- `modified` events are ignored by the watcher policy
 
 ### Review Commands
 

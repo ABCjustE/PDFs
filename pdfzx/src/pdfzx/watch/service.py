@@ -6,9 +6,17 @@ import logging
 import os
 from pathlib import Path
 
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session
 from watchdog.events import FileSystemEvent
 from watchdog.events import FileSystemMovedEvent
 
+from pdfzx.config import ScanConfig
+from pdfzx.db.repositories import DocumentPathRepository
+from pdfzx.db.repositories import DocumentRepository
+from pdfzx.db.session import create_sqlite_engine
+from pdfzx.db.session import init_sqlite_db
+from pdfzx.inventory import process_pdf
 from pdfzx.watch.events import CanonicalWatchOperation
 from pdfzx.watch.events import RawWatchEvent
 
@@ -16,9 +24,20 @@ from pdfzx.watch.events import RawWatchEvent
 class WatchService:
     """Normalize raw watchdog events and log canonical routing decisions."""
 
-    def __init__(self, *, root: Path, logger: logging.Logger | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        root: Path,
+        config: ScanConfig | None = None,
+        logger: logging.Logger | None = None,
+    ) -> None:
         self._root = root.resolve()
+        self._config = config
         self._logger = logger or logging.getLogger(__name__)
+        self._engine: Engine | None = None
+        if config is not None:
+            init_sqlite_db(config.sqlite3_db_path)
+            self._engine = create_sqlite_engine(config.sqlite3_db_path)
 
     @property
     def root(self) -> Path:
@@ -31,7 +50,11 @@ class WatchService:
         if raw_event is None:
             return None
         self.log_raw_event(raw_event)
-        return self.route_raw_event(raw_event)
+        operation = self.route_raw_event(raw_event)
+        if operation is None:
+            return None
+        self.apply_operation(operation)
+        return operation
 
     def normalize_event(self, event: FileSystemEvent) -> RawWatchEvent | None:
         """Convert one watchdog event into a normalized raw watch event."""
@@ -125,6 +148,88 @@ class WatchService:
             return None
         self.log_route(operation)
         return operation
+
+    def apply_operation(self, operation: CanonicalWatchOperation) -> None:
+        """Apply one routed watcher operation to SQLite state when configured."""
+        if self._config is None or self._engine is None:
+            return
+        if operation.operation == "path_discovered":
+            rel_path = operation.src_rel_path or operation.dest_rel_path
+            if rel_path is None:
+                return
+            self._handle_path_discovered(rel_path=rel_path)
+            return
+        if operation.operation == "path_moved":
+            if operation.src_rel_path is None or operation.dest_rel_path is None:
+                return
+            self._handle_path_moved(
+                old_rel_path=operation.src_rel_path,
+                new_rel_path=operation.dest_rel_path,
+            )
+            return
+        if operation.operation == "path_missing" and operation.src_rel_path is not None:
+            self._handle_path_missing(rel_path=operation.src_rel_path)
+
+    def close(self) -> None:
+        """Dispose the cached SQLite engine."""
+        if self._engine is not None:
+            self._engine.dispose()
+
+    def _handle_path_discovered(self, *, rel_path: str) -> None:
+        assert self._config is not None
+        assert self._engine is not None
+        record = process_pdf(self._root / rel_path, self._root, self._config)
+        with Session(self._engine) as session:
+            documents = DocumentRepository(session)
+            paths = DocumentPathRepository(session)
+            if documents.get_by_sha256(sha256=record.sha256) is None:
+                documents.create_from_record(record=record)
+                self._logger.info(
+                    "watch.db",
+                    extra={"op": "document_created", "sha256": record.sha256, "path": rel_path},
+                )
+            paths.upsert(sha256=record.sha256, rel_path=rel_path)
+            session.commit()
+
+    def _handle_path_moved(self, *, old_rel_path: str, new_rel_path: str) -> None:
+        assert self._config is not None
+        assert self._engine is not None
+        with Session(self._engine) as session:
+            paths = DocumentPathRepository(session)
+            sha256 = paths.move(old_rel_path=old_rel_path, new_rel_path=new_rel_path)
+            if sha256 is None:
+                session.rollback()
+                self._handle_path_discovered(rel_path=new_rel_path)
+                return
+            session.commit()
+            self._logger.info(
+                "watch.db",
+                extra={
+                    "op": "path_moved",
+                    "sha256": sha256,
+                    "src": old_rel_path,
+                    "dst": new_rel_path,
+                },
+            )
+
+    def _handle_path_missing(self, *, rel_path: str) -> None:
+        assert self._config is not None
+        assert self._engine is not None
+        with Session(self._engine) as session:
+            deleted = DocumentPathRepository(session).delete_by_rel_path(rel_path=rel_path)
+            if deleted is None:
+                session.rollback()
+                return
+            session.commit()
+            self._logger.info(
+                "watch.db",
+                extra={
+                    "op": "path_deleted",
+                    "sha256": deleted.sha256,
+                    "path": rel_path,
+                    "remaining_paths": deleted.remaining_paths,
+                },
+            )
 
     def _to_rel_path(self, raw_path: str | bytes | None) -> str | None:
         if raw_path is None:

@@ -30,7 +30,11 @@ class _WatchHandler(FileSystemEventHandler):
 def run_watch_process(*, config: ScanConfig, log_level: str) -> int:
     """Start a watchdog observer and log PDF file events until interrupted."""
     configure_logging(log_level)
-    service = WatchService(root=config.root_path, logger=logging.getLogger("pdfzx.watch"))
+    service = WatchService(
+        root=config.root_path,
+        config=config,
+        logger=logging.getLogger("pdfzx.watch"),
+    )
     observer = Observer()
     observer.schedule(_WatchHandler(service=service), str(config.root_path), recursive=True)
     observer.start()
@@ -43,4 +47,5 @@ def run_watch_process(*, config: ScanConfig, log_level: str) -> int:
         observer.stop()
     finally:
         observer.join()
+        service.close()
     return 0
