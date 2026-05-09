@@ -12,8 +12,10 @@ from watchdog.events import FileSystemEvent
 from watchdog.events import FileSystemMovedEvent
 
 from pdfzx.config import ScanConfig
+from pdfzx.db.models import TaxonomyNode
 from pdfzx.db.repositories import DocumentPathRepository
 from pdfzx.db.repositories import DocumentRepository
+from pdfzx.db.repositories import TaxonomyTreeRepository
 from pdfzx.db.session import create_sqlite_engine
 from pdfzx.db.session import init_sqlite_db
 from pdfzx.inventory import process_pdf
@@ -25,11 +27,7 @@ class WatchService:
     """Normalize raw watchdog events and log canonical routing decisions."""
 
     def __init__(
-        self,
-        *,
-        root: Path,
-        config: ScanConfig | None = None,
-        logger: logging.Logger | None = None,
+        self, *, root: Path, config: ScanConfig | None = None, logger: logging.Logger | None = None
     ) -> None:
         self._root = root.resolve()
         self._config = config
@@ -74,32 +72,10 @@ class WatchService:
             is_synthetic=getattr(event, "is_synthetic", False),
         )
 
-    def choose_operation(
-        self, raw_event: RawWatchEvent
-    ) -> CanonicalWatchOperation | None:
+    def choose_operation(self, raw_event: RawWatchEvent) -> CanonicalWatchOperation | None:
         """Choose one canonical project operation from a normalized raw event."""
         if raw_event.event_class == "FileMovedEvent":
-            if raw_event.src_rel_path is not None and raw_event.dest_rel_path is not None:
-                return CanonicalWatchOperation(
-                    operation="path_moved",
-                    src_rel_path=raw_event.src_rel_path,
-                    dest_rel_path=raw_event.dest_rel_path,
-                    reason="trusted move event within watched root",
-                )
-            if raw_event.src_rel_path is not None:
-                return CanonicalWatchOperation(
-                    operation="path_missing",
-                    src_rel_path=raw_event.src_rel_path,
-                    dest_rel_path=None,
-                    reason="move event leaving watched root",
-                )
-            if raw_event.dest_rel_path is not None:
-                return CanonicalWatchOperation(
-                    operation="path_discovered",
-                    src_rel_path=None,
-                    dest_rel_path=raw_event.dest_rel_path,
-                    reason="move event entering watched root",
-                )
+            return self._choose_move_operation(raw_event)
         if raw_event.event_class == "FileDeletedEvent":
             return CanonicalWatchOperation(
                 operation="path_missing",
@@ -114,6 +90,14 @@ class WatchService:
                 dest_rel_path=None,
                 reason="create event under watched root",
             )
+        if raw_event.event_class == "FileModifiedEvent" and raw_event.src_rel_path is not None:
+            if not self._is_known_path(raw_event.src_rel_path):
+                return CanonicalWatchOperation(
+                    operation="path_discovered",
+                    src_rel_path=raw_event.src_rel_path,
+                    dest_rel_path=None,
+                    reason="modified event on untracked path - likely copy or clone",
+                )
         return None
 
     def log_raw_event(self, raw_event: RawWatchEvent) -> None:
@@ -163,8 +147,7 @@ class WatchService:
             if operation.src_rel_path is None or operation.dest_rel_path is None:
                 return
             self.handle_path_moved(
-                old_rel_path=operation.src_rel_path,
-                new_rel_path=operation.dest_rel_path,
+                old_rel_path=operation.src_rel_path, new_rel_path=operation.dest_rel_path
             )
             return
         if operation.operation == "path_missing" and operation.src_rel_path is not None:
@@ -176,37 +159,68 @@ class WatchService:
             self._engine.dispose()
 
     def handle_path_discovered(self, *, rel_path: str) -> None:
-        """Scan one current PDF path and ensure its document/path rows exist."""
+        """Scan one PDF path and ensure document, path, and taxonomy rows exist."""
         assert self._config is not None
         assert self._engine is not None
-        record = process_pdf(self._root / rel_path, self._root, self._config)
+        try:
+            record = process_pdf(self._root / rel_path, self._root, self._config)
+        except Exception:
+            self._logger.warning(
+                "watch.db",
+                extra={"op": "discovery_skipped", "path": rel_path, "reason": "process_pdf failed"},
+            )
+            return
         with Session(self._engine) as session:
             documents = DocumentRepository(session)
-            paths = DocumentPathRepository(session)
-            if documents.get_by_sha256(sha256=record.sha256) is None:
+            document = documents.get_by_sha256(sha256=record.sha256)
+            if document is None:
                 documents.create_from_record(record=record)
                 self._logger.info(
                     "watch.db",
                     extra={"op": "document_created", "sha256": record.sha256, "path": rel_path},
                 )
             else:
-                document = documents.get_by_sha256(sha256=record.sha256)
-                assert document is not None
                 document.file_name = Path(rel_path).name
-            paths.upsert(sha256=record.sha256, rel_path=rel_path)
+            DocumentPathRepository(session).upsert(sha256=record.sha256, rel_path=rel_path)
+            taxonomy = TaxonomyTreeRepository(session)
+            root = taxonomy.ensure_root_node(
+                name=self._config.taxonomy_root_name, path=self._config.taxonomy_root_name
+            )
+            taxonomy.add_documents(node_id=root.id, sha256s=[record.sha256])
+            if self._is_in_taxonomy_root(rel_path):
+                node = self._ensure_node_chain(taxonomy, self._taxonomy_node_path(rel_path))
+                taxonomy.add_documents(node_id=node.id, sha256s=[record.sha256])
             session.commit()
 
     def handle_path_moved(self, *, old_rel_path: str, new_rel_path: str) -> None:
-        """Move one known document path, or fall back to discovery on the destination."""
+        """Move one known document path and sync taxonomy membership."""
         assert self._config is not None
         assert self._engine is not None
         with Session(self._engine) as session:
-            paths = DocumentPathRepository(session)
-            sha256 = paths.move(old_rel_path=old_rel_path, new_rel_path=new_rel_path)
+            sha256 = DocumentPathRepository(session).move(
+                old_rel_path=old_rel_path, new_rel_path=new_rel_path
+            )
             if sha256 is None:
                 session.rollback()
                 self.handle_path_discovered(rel_path=new_rel_path)
                 return
+            old_in_root = self._is_in_taxonomy_root(old_rel_path)
+            new_in_root = self._is_in_taxonomy_root(new_rel_path)
+            if old_in_root or new_in_root:
+                taxonomy = TaxonomyTreeRepository(session)
+                if old_in_root:
+                    old_node = taxonomy.get_node_by_path(
+                        path=self._taxonomy_node_path(old_rel_path)
+                    )
+                    if old_node is not None:
+                        taxonomy.remove_document(node_id=old_node.id, sha256=sha256)
+                if old_in_root or new_in_root:
+                    taxonomy.mark_assignments_manual_touched(sha256=sha256)
+                if new_in_root:
+                    new_node = self._ensure_node_chain(
+                        taxonomy, self._taxonomy_node_path(new_rel_path)
+                    )
+                    taxonomy.add_documents(node_id=new_node.id, sha256s=[sha256])
             session.commit()
             self._logger.info(
                 "watch.db",
@@ -219,7 +233,7 @@ class WatchService:
             )
 
     def handle_path_missing(self, *, rel_path: str) -> None:
-        """Remove one stale document path row while keeping the document hash record."""
+        """Remove one stale document path and sync taxonomy membership."""
         assert self._config is not None
         assert self._engine is not None
         with Session(self._engine) as session:
@@ -227,6 +241,15 @@ class WatchService:
             if deleted is None:
                 session.rollback()
                 return
+            taxonomy = TaxonomyTreeRepository(session)
+            if self._is_in_taxonomy_root(rel_path):
+                node = taxonomy.get_node_by_path(path=self._taxonomy_node_path(rel_path))
+                if node is not None:
+                    taxonomy.remove_document(node_id=node.id, sha256=deleted.sha256)
+            if deleted.remaining_paths == 0:
+                root = taxonomy.get_node_by_path(path=self._config.taxonomy_root_name)
+                if root is not None:
+                    taxonomy.remove_document(node_id=root.id, sha256=deleted.sha256)
             session.commit()
             self._logger.info(
                 "watch.db",
@@ -237,6 +260,59 @@ class WatchService:
                     "remaining_paths": deleted.remaining_paths,
                 },
             )
+
+    def _is_in_taxonomy_root(self, rel_path: str) -> bool:
+        if self._config is None:
+            return False
+        return rel_path.startswith(self._config.taxonomy_root_name + "/")
+
+    def _taxonomy_node_path(self, rel_path: str) -> str:
+        """Return the taxonomy node path for a rel_path inside the taxonomy root.
+
+        "Root/Math/Physics/paper.pdf" -> "Root/Math/Physics"
+        """
+        return str(Path(rel_path).parent)
+
+    def _ensure_node_chain(self, taxonomy: TaxonomyTreeRepository, node_path: str) -> TaxonomyNode:
+        """Ensure all nodes along node_path exist and return the leaf node."""
+        parts = node_path.split("/")
+        node = taxonomy.ensure_root_node(name=parts[0], path=parts[0])
+        for part in parts[1:]:
+            node = taxonomy.ensure_child_node(parent_id=node.id, parent_path=node.path, name=part)
+        return node
+
+    def _is_known_path(self, rel_path: str) -> bool:
+        if self._engine is None:
+            return False
+        with Session(self._engine) as session:
+            return (
+                DocumentPathRepository(session).get_sha256_by_rel_path(rel_path=rel_path)
+                is not None
+            )
+
+    def _choose_move_operation(self, raw_event: RawWatchEvent) -> CanonicalWatchOperation | None:
+        if raw_event.src_rel_path is not None and raw_event.dest_rel_path is not None:
+            return CanonicalWatchOperation(
+                operation="path_moved",
+                src_rel_path=raw_event.src_rel_path,
+                dest_rel_path=raw_event.dest_rel_path,
+                reason="trusted move event within watched root",
+            )
+        if raw_event.src_rel_path is not None:
+            return CanonicalWatchOperation(
+                operation="path_missing",
+                src_rel_path=raw_event.src_rel_path,
+                dest_rel_path=None,
+                reason="move event leaving watched root",
+            )
+        if raw_event.dest_rel_path is not None:
+            return CanonicalWatchOperation(
+                operation="path_discovered",
+                src_rel_path=None,
+                dest_rel_path=raw_event.dest_rel_path,
+                reason="move event entering watched root",
+            )
+        return None
 
     def _to_rel_path(self, raw_path: str | bytes | None) -> str | None:
         if raw_path is None:

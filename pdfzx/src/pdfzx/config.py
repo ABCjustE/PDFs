@@ -37,7 +37,13 @@ class ScanConfig(BaseModel):
     llm_max_toc_entries: int = DEFAULT_LLM_MAX_TOC_ENTRIES
     partition_seed: str = DEFAULT_PARTITION_SEED
     partition_chunk_size: int = DEFAULT_PARTITION_CHUNK_SIZE
+    taxonomy_root_name: str = "Root"
     taxonomy_exclude_path_keywords: list[str] = []
+
+    @property
+    def taxonomy_root_path(self) -> Path:
+        """Filesystem folder watched as the taxonomy root, derived from taxonomy_root_name."""
+        return self.root_path / self.taxonomy_root_name
 
     @field_validator("root_path")
     @classmethod
@@ -119,6 +125,7 @@ def get_config() -> ScanConfig:
     partition_chunk_size = int(
         os.environ.get("PDFZX_PARTITION_CHUNK_SIZE", str(DEFAULT_PARTITION_CHUNK_SIZE))
     )
+    taxonomy_root_name = os.environ.get("PDFZX_TAXONOMY_ROOT_NAME", "Root")
     taxonomy_exclude_path_keywords = _parse_env_keyword_list(
         os.environ.get("PDFZX_TAXONOMY_EXCLUDE_PATH_KEYWORDS")
     )
@@ -135,5 +142,6 @@ def get_config() -> ScanConfig:
         llm_max_toc_entries=llm_max_toc_entries,
         partition_seed=partition_seed,
         partition_chunk_size=partition_chunk_size,
+        taxonomy_root_name=taxonomy_root_name,
         taxonomy_exclude_path_keywords=taxonomy_exclude_path_keywords,
     )

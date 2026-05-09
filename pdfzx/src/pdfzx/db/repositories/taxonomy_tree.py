@@ -289,6 +289,8 @@ class TaxonomyTreeRepository:
         """Create or update one assignment decision under a parent node."""
         assignment = self._session.get(TaxonomyAssignment, {"node_id": node_id, "sha256": sha256})
         now = datetime.now(tz=UTC).replace(tzinfo=None)
+        if assignment is not None and assignment.status in {"applied", "manual_touched"}:
+            return assignment
         if assignment is None:
             assignment = TaxonomyAssignment(
                 node_id=node_id,
@@ -470,6 +472,28 @@ class TaxonomyTreeRepository:
             applied += 1
         self._session.flush()
         return {"applied": applied, "skipped": skipped, "excluded": excluded}
+
+    def remove_document(self, *, node_id: int, sha256: str) -> bool:
+        """Remove one document from a node's membership. Returns True if a row was deleted."""
+        row = self._session.get(TaxonomyNodeDocument, {"node_id": node_id, "sha256": sha256})
+        if row is None:
+            return False
+        self._session.delete(row)
+        self._session.flush()
+        return True
+
+    def mark_assignments_manual_touched(self, *, sha256: str) -> int:
+        """Mark all assignments for one document as manual_touched. Returns count updated."""
+        stmt = select(TaxonomyAssignment).where(TaxonomyAssignment.sha256 == sha256)
+        now = datetime.now(tz=UTC).replace(tzinfo=None)
+        count = 0
+        for assignment in self._session.scalars(stmt):
+            assignment.status = "manual_touched"
+            assignment.updated_at = now
+            count += 1
+        if count:
+            self._session.flush()
+        return count
 
     def _existing_document_sha256s(self, sha256s: list[str]) -> list[str]:
         stmt = select(Document.sha256).where(Document.sha256.in_(set(sha256s)))

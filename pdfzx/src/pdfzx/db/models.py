@@ -27,7 +27,9 @@ class Document(Base):
 
     sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
     md5: Mapped[str] = mapped_column(String(32), nullable=False)
-    file_name: Mapped[str] = mapped_column(String(512), nullable=False) # not canonical, just representative
+    file_name: Mapped[str] = mapped_column(
+        String(512), nullable=False
+    )  # not canonical, just representative
     normalised_name: Mapped[str | None] = mapped_column(String(512))
     llm_enriched_name: Mapped[str | None] = mapped_column(String(512))
     metadata_title: Mapped[str | None] = mapped_column(String(512))
@@ -172,7 +174,7 @@ class TaxonomyNode(Base):
     """One node in the taxonomy tree."""
 
     __tablename__ = "taxonomy_nodes"
-    __table_args__ = (UniqueConstraint("parent_id", "name"), UniqueConstraint("path"),)
+    __table_args__ = (UniqueConstraint("parent_id", "name"), UniqueConstraint("path"))
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("taxonomy_nodes.id"))
@@ -198,8 +200,7 @@ class TaxonomyNode(Base):
         cascade="all, delete-orphan",
     )
     incoming_assignments: Mapped[list[TaxonomyAssignment]] = relationship(
-        foreign_keys="TaxonomyAssignment.assigned_child_id",
-        back_populates="assigned_child",
+        foreign_keys="TaxonomyAssignment.assigned_child_id", back_populates="assigned_child"
     )
 
 

@@ -27,6 +27,15 @@ class DocumentPathRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
+    def list_by_sha256(self, *, sha256: str) -> list[str]:
+        """Return all relative paths for one document hash, sorted."""
+        stmt = (
+            select(DocumentPath.rel_path)
+            .where(DocumentPath.sha256 == sha256)
+            .order_by(DocumentPath.rel_path.asc())
+        )
+        return list(self._session.scalars(stmt))
+
     def get_sha256_by_rel_path(self, *, rel_path: str) -> str | None:
         """Return the owning document hash for one canonical relative path."""
         return self._session.scalar(
